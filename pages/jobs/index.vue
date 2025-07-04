@@ -172,7 +172,6 @@ onMounted(() => {
 
 watch(() => langStore.preferredLanguage, async () => {
   console.log('Language changed. Re-fetching...')
-  await checkConformance()
   await fetchData()
 })
 
