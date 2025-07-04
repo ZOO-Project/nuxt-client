@@ -135,7 +135,7 @@ onMounted(() => {
 
 watch(() => langStore.preferredLanguage, async () => {
   console.log('Language changed. Re-fetching...')
-  await fetchData()
+  await fetchJobDetails()
 })
 
 onBeforeUnmount(() => {
