@@ -5,7 +5,10 @@
   </NuxtLayout>
 </template>
 <script setup lang="ts">
+import { useLangStore } from '~/stores/lang'
+const langStore = useLangStore()
 
+langStore.initLanguage()
 </script>
 
 <style>

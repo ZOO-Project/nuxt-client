@@ -162,5 +162,4 @@ const getReadableLinkText = (link: any): string => {
 
 
 onMounted(fetchLandingAndApiInfo)
-
 </script>
