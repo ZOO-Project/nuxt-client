@@ -7,11 +7,7 @@
           <div class="col-auto">
             <NuxtLink to="/">
               <q-avatar square >
-<<<<<<< HEAD
-                <q-img src="//zoo-project.org/images/zoo-sun-logo-big.png" width="128"/>
-=======
                 <q-img src="https://zoo-project.org/images/zoo-sun-logo-big.png" width="128"/>
->>>>>>> f2d325061a5bdd4d44d07f199805402967e44a10
               </q-avatar>
 
             </NuxtLink>
@@ -73,10 +69,7 @@
       <div class="col-auto">
         <q-tabs dense align="left">
           <q-route-tab v-if="authStore.user" no-caps to="/swagger" label="Swagger"/>
-<<<<<<< HEAD
           <q-route-tab v-if="authStore.user" no-caps to="/ogc-api" label="OGC API"/>
-=======
->>>>>>> f2d325061a5bdd4d44d07f199805402967e44a10
           <q-route-tab v-if="authStore.user" no-caps to="/processes" label="Processes"/>
           <q-route-tab v-if="authStore.user" no-caps to="/jobs" label="Jobs"/>
         </q-tabs>

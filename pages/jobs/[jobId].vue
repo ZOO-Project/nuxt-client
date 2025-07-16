@@ -89,7 +89,7 @@
 
         <q-card-section>
           <div v-if="modalContent">
-            <pre>{{ modalContent }}</pre>
+            <pre style="max-width:100%;max-height:250px;overflow:auto;">{{ modalContent }}</pre>
           </div>
           <div v-else class="text-negative">No data or failed to fetch.</div>
         </q-card-section>
