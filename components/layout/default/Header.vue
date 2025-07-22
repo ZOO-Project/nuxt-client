@@ -25,22 +25,9 @@
 
       </div>
       <div class="col-auto">
-        <div class="row">
-            <div class="q-pt-sm q-pr-md" style="padding-top: 3px;">
-              <q-select
-                v-model="selectedLang"
-                :options="[
-                  { label: 'English', value: 'en' },
-                  { label: 'Française', value: 'fr' }
-                ]"
-                dense
-                borderless
-                emit-value
-                map-options
-                style="width: 150px"
-                :label="t('Language')"
-              />
-      </div>
+         <div class="row items-center"> 
+          <SettingsMenu />
+
           <div class="q-pt-sm" style="padding-top: 36px;">
             <LayoutSharedHeaderMenu :show="showHeaderMenu" @hide="showHeaderMenu = false"/>
           </div>
@@ -101,9 +88,11 @@
 </template>
 
 <script setup lang="ts">
+import SettingsMenu from '~/components/layout/shared/SettingsMenu.vue'
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCookie } from '#app'
+
 const config = useRuntimeConfig()
 const showHeaderMenu = ref(false)
 const isLoggedUser = ref(false) // TODO: Implement user authentication and pinia storage of user data
@@ -113,12 +102,7 @@ const loggedUser = ref({email: 'mathereall@gmail.com'}) // TODO: Implement user 
 const authStore = useAuthStore()
 const { locale, t } = useI18n()
 
-const selectedLang = ref(locale.value)
 
-watch(selectedLang, (newLang) => {
-  locale.value = newLang
-  useCookie('i18n_redirected').value = newLang
-})
 
 const $q = useQuasar()
 const stringToMD5 = useStringToMD5()
