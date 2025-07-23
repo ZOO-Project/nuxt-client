@@ -568,7 +568,7 @@ const removeInputField = (inputId: string, index: number) => {
         </div>
           <q-select
             v-model="preferMode"
-            :options="['async', 'sync']"
+            :options="['respond-async', 'respond-sync']"
             label="Execution Mode"
             filled
             dense
