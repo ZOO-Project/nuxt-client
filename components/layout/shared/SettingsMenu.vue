@@ -38,16 +38,19 @@ import { ref, watch, computed } from 'vue'
 import { useLayoutStore } from '~/stores/layout'
 import { useI18n } from 'vue-i18n'
 import { useCookie } from '#app'
+
 const { locale, t } = useI18n()
 const selectedLang = ref(locale.value)
 watch(selectedLang, (val) => {
   locale.value = val
   useCookie('i18n_redirected').value = val
 })
+
 const layoutStore = useLayoutStore()
 const selectedLayout = ref(layoutStore.currentLayout)
 watch(selectedLayout, (val) => {
   layoutStore.setLayout(val)
 })
+
 const authStore = useAuthStore()
 </script>

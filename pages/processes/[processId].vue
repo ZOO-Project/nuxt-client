@@ -29,7 +29,6 @@ const subscriberValues = ref({
   failedUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-83dcc87e-55a7-11f0-abed-0242ac106a07&type=failed'
 })
 
-
 function initializeInputValues(inputs: Record<string, any>): Record<string, any> {
   const values: Record<string, any> = {}
   for (const [key, input] of Object.entries(inputs)) {
@@ -43,7 +42,6 @@ function initializeInputValues(inputs: Record<string, any>): Record<string, any>
   }
   return values
 }
-
 
 const fetchData = async () => {
   try {
