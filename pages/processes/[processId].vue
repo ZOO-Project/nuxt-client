@@ -2,8 +2,6 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRuntimeConfig } from '#imports'
-import { reactive } from 'vue'
-
 const {
   params: { processId }
 } = useRoute()
