@@ -2,7 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRuntimeConfig } from '#imports'
-import { reactive } from 'vue'
+import { triggerRef } from 'vue'
 
 const {
   params: { processId }
@@ -12,7 +12,7 @@ const authStore = useAuthStore()
 const config = useRuntimeConfig()
 
 const data = ref(null)
-const inputValues = ref<Record<string, any>>({})
+const inputValues = ref<Record<string, Array<{ mode: 'value' | 'href', value: string, href: string }>>>({})
 const outputValues = ref<Record<string, any>>({})
 const response = ref(null)
 const loading = ref(false)
@@ -41,24 +41,28 @@ const fetchData = async () => {
         console.log(input)
         console.log('isComplexInput:', input, isComplexInput(input))
 
+        // Complex input
         if (
           input?.schema?.contentMediaType ||
           input?.schema?.mediaType ||
           (input?.schema?.oneOf?.some(f => f.contentMediaType))
         ) {
-          const supportedFormats = input.schema.oneOf?.map(f => f.contentMediaType) || ['application/json', 'text/xml', 'text/plain'];
-
-          inputValues.value[key] = {
-            mode: 'href',
+          const supportedFormats = input.schema.oneOf?.map(f => f.contentMediaType) || DEFAULT_SUPPORTED_FORMATS;
+          const hrefOptions = input?.example?.hrefOptions || []
+          inputValues.value[key] = [
+          {
+            mode: hrefOptions.length > 0 ? 'href' : 'value',
             href: '',
             value: '',
             format: supportedFormats[0],
-            availableFormats: supportedFormats
-          };
+            availableFormats: supportedFormats,
+            hrefOptions // Add this if applicable
+          }
+        ]
           continue;
         }
 
-        //  Bounding Box Detection and Initialization
+        // Bounding Box input
         if (
           input.schema?.type === 'object' &&
           input.schema?.properties?.bbox &&
@@ -71,23 +75,42 @@ const fetchData = async () => {
           continue
         }
 
-        //  Default Init for other types
+        // Multiple inputs (array)
+        if (input.schema?.type === 'array') {
+          inputValues.value[key] = [
+           {
+              mode: 'href',
+              href: '',
+              value: '',
+              format: supportedFormats[0],
+              availableFormats: supportedFormats
+            }
+          ];
+          continue
+        }
+
+        // Default init for literal input
         inputValues.value[key] = input.schema?.default ?? (input.schema?.type === 'number' ? 0 : '')
       }
     }
     if (data.value && data.value.outputs) {
       for (const [key, input] of Object.entries(data.value.outputs)) {
-        if(input.schema.oneOf?.length > 0){
-          const myEnum=[];
-          for(var i=0;i<input.schema.oneOf.length;i++){
-            if(input.schema.oneOf[i].type=="object")
+        if (input.schema.oneOf?.length > 0) {
+          const myEnum = []
+          for (var i = 0; i < input.schema.oneOf.length; i++) {
+            if (input.schema.oneOf[i].type === "object")
               myEnum.push("application/json")
-            else 
+            else
               myEnum.push(input.schema.oneOf[i].contentMediaType)
           }
-          outputValues.value[key] = [{ id: "transmission", enum: ["reference","value"], cval: "reference" },{ id: "format", enum: myEnum, cval: myEnum[0] }]
-        }else{
-          outputValues.value[key] = [{ id: "transmission", enum: ["value","reference"], cval: "value" }]
+          outputValues.value[key] = [
+            { id: "transmission", enum: ["reference", "value"], cval: "reference" },
+            { id: "format", enum: myEnum, cval: myEnum[0] }
+          ]
+        } else {
+          outputValues.value[key] = [
+            { id: "transmission", enum: ["value", "reference"], cval: "value" }
+          ]
         }
       }
     }
@@ -132,12 +155,13 @@ watch([inputValues, outputValues, subscriberValues], ([newInputs, newOutputs, ne
   for (const [key, val] of Object.entries(newInputs)) {
     // If multiple inputs (array)
     if (Array.isArray(val)) {
-      formattedInputs[key] = val.map(v => typeof v === 'object' && 'mode' in v
-        ? v.mode === 'href'
-          ? { href: v.href }
-          : { value: v.value, format: { mediaType: v.format } }
-        : v
-      )
+      formattedInputs[key] = val.map(v => {
+        if (v.mode === 'href') {
+          return { href: v.href }
+        } else {
+          return { value: v.value }
+        }
+      })
     } else if (val && typeof val === 'object' && 'mode' in val) {
       formattedInputs[key] = val.mode === 'href'
         ? { href: val.href }
@@ -220,7 +244,7 @@ const submitProcess = async () => {
 }
 
 const isMultipleInput = (input: any) => {
-  return input.maxOccurs > 1 ? true : false
+  return input.maxOccurs && input.maxOccurs > 1
 }
 
 const isBoundingBoxInput = (input: any) => {
@@ -240,16 +264,31 @@ const isComplexInput = (input: any) => {
   )
 }
 
+const DEFAULT_SUPPORTED_FORMATS = ['application/json', 'text/plain'] 
+
 const addInputField = (inputId: string) => {
+
   if (!Array.isArray(inputValues.value[inputId])) {
-    inputValues.value[inputId] = [inputValues.value[inputId] || '']
+    inputValues.value[inputId] = []
   }
-  inputValues.value[inputId].push('')
+
+  const currentFormats = inputValues.value[inputId][0]?.availableFormats || DEFAULT_SUPPORTED_FORMATS
+
+  inputValues.value[inputId].push({
+    mode: 'value',
+    value: '',
+    href: '',
+    format: currentFormats[0],
+    availableFormats: currentFormats
+  })
+
+  triggerRef(inputValues)
 }
 
 const removeInputField = (inputId: string, index: number) => {
   if (Array.isArray(inputValues.value[inputId]) && inputValues.value[inputId].length > 1) {
     inputValues.value[inputId].splice(index, 1)
+    triggerRef(inputValues)
   }
 }
 
@@ -285,32 +324,6 @@ const removeInputField = (inputId: string, index: number) => {
           <q-card class="q-pa-md">
               <div class="row items-center q-mb-sm">
                 <div class="text-blue text-bold">{{ inputId.toUpperCase() }}</div>
-                <q-space />
-                <!-- Bouton pour ajouter un champ si c'est un input multiple -->
-                <q-btn 
-                  v-if="isMultipleInput(input)"
-                  round 
-                  dense 
-                  flat 
-                  icon="add" 
-                  color="primary" 
-                  size="sm"
-                  @click="addInputField(inputId)"
-                >
-                  <q-tooltip>Add another value</q-tooltip>
-                </q-btn>
-                <q-btn 
-                  v-if="isMultipleInput(input)"
-                  round 
-                  dense 
-                  flat 
-                  icon="delete" 
-                  color="primary" 
-                  size="sm"
-                  @click="removeInputField(inputId)"
-                >
-                  <q-tooltip>Delete the last value</q-tooltip>
-                </q-btn>
               </div>
 
             <!-- <div class="text-blue text-bold q-mb-sm">{{ inputId.toUpperCase() }}</div> -->
@@ -319,53 +332,84 @@ const removeInputField = (inputId: string, index: number) => {
                 {{ input.schema?.type || 'text' }}
               </q-badge>
 
-              <!-- Complex Input FIRST -->
-              <template v-if="isComplexInput(input)">
-                <q-option-group
-                  v-model="inputValues[inputId].mode"
-                  :options="[
-                    { label: 'Provide URL (href)', value: 'href' },
-                    { label: 'Provide Value Inline', value: 'value' }
-                  ]"
-                  type="radio"
-                  inline
-                  class="q-mb-md"
-                />
-
-                <q-input
-                  v-if="inputValues[inputId].mode === 'href'"
-                  v-model="inputValues[inputId].href"
-                  label="Reference URL (href)"
-                  placeholder="https://example.com/input.json"
-                  filled
-                  dense
-                />
-
-                <q-banner
-                  v-if="inputValues[inputId].mode === 'href' && inputValues[inputId].availableFormats?.length"
-                  class="bg-grey-2 text-black q-mt-sm"
+              <!-- Complex + Multiple input -->
+              <template v-if="isComplexInput(input) && Array.isArray(inputValues[inputId])">
+                <div
+                  v-for="(item, idx) in inputValues[inputId]"
+                  :key="idx"
+                  class="q-gutter-sm q-mb-md"
                 >
-                  Supported formats: {{ inputValues[inputId].availableFormats.join(', ') }}
-                </q-banner>
+                  <q-option-group
+                    v-model="inputValues[inputId][idx].mode"
+                    :options="[
+                      { label: 'Provide URL (href)', value: 'href' },
+                      { label: 'Provide Value Inline', value: 'value' }
+                    ]"
+                    type="radio"
+                    inline
+                  />
 
-                <div v-if="inputValues[inputId].mode === 'value'" class="q-gutter-md">
-                 <q-select
-                  v-model="inputValues[inputId].format"
-                  :options="inputValues[inputId].availableFormats"
-                  label="Content Format"
-                  dense
-                  filled
-                  />
-                  <q-input
-                    v-model="inputValues[inputId].value"
-                    label="Input Value"
-                    type="textarea"
-                    autogrow
-                    filled
+                  <template v-if="item.mode === 'href'">
+                    <q-option-group
+                      v-if="item.hrefOptions && item.hrefOptions.length > 0"
+                      v-model="item.href"
+                      :options="item.hrefOptions.map(h => ({ label: h, value: h }))"
+                      type="radio"
+                      inline
+                    />
+                    <q-input
+                      v-else
+                      v-model="item.href"
+                      label="Reference URL (href)"
+                      filled
+                      dense
+                    />
+                  </template>
+
+                  <div v-else>
+                    <q-select
+                      v-model="item.format"
+                      :options="item.availableFormats"
+                      label="Content Format"
+                      dense
+                      filled
+                    />
+                    <q-input
+                      v-model="item.value"
+                      label="Input Value"
+                      type="textarea"
+                      autogrow
+                      filled
+                      dense
+                    />
+                  </div>
+
+                  <q-btn
+                    icon="delete"
+                    round
                     dense
-                    class="resizable-textarea"
-                  />
+                    flat
+                    color="red"
+                    size="sm"
+                    class="q-mt-sm"
+                    @click="removeInputField(inputId, idx)"
+                    v-if="inputValues[inputId].length > 1"
+                  >
+                    <q-tooltip>Remove</q-tooltip>
+                  </q-btn>
                 </div>
+
+                <!-- Add another input button -->
+                <template v-if="isMultipleInput(input)">
+                  <q-btn
+                    flat
+                    icon="add"
+                    label="Add Another"
+                    @click="addInputField(inputId)"
+                    size="sm"
+                    class="q-mt-sm"
+                  />
+                </template>
               </template>
 
               <!-- Bounding Box Input -->
@@ -385,7 +429,7 @@ const removeInputField = (inputId: string, index: number) => {
                   </div>
                   <q-select
                     v-model="inputValues[inputId].crs"
-                    :options="['EPSG:4326', 'EPSG:3857', 'EPSG:7781']"
+                    :options="EPSG_CODES"
                     label="EPSG Code"
                     filled
                     dense
@@ -570,7 +614,7 @@ const removeInputField = (inputId: string, index: number) => {
         </div>
           <q-select
             v-model="preferMode"
-            :options="['async', 'sync']"
+            :options="['respond-async', 'respond-sync']"
             label="Execution Mode"
             filled
             dense
