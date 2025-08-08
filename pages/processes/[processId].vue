@@ -23,6 +23,8 @@ const showDialog = ref(false)
 const requiredInputs = ref<string[]>([])
 const inputRefs = ref<Record<string, HTMLElement | null>>({})
 const validationErrors = ref<Record<string, boolean>>({})
+const progressPercent = ref(0)
+const progressMessage = ref('')
 
 const subscriberValues = ref({
   successUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-83dcc87e-55a7-11f0-abed-0242ac106a07&type=success',
@@ -224,6 +226,57 @@ const pollJobStatus = async (jobId: string) => {
   }
 }
 
+const listenToWebSocket = (jobId: string) => {
+  const wsUrl = `ws://${window.location.hostname}:8888/`;
+  const ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+  };
+
+  ws.onmessage = (event) => {
+    console.log('Raw WebSocket message:', event.data);
+
+    try {
+      const message = JSON.parse(event.data);
+      console.log('Parsed WebSocket message:', message); 
+
+      if (!message.jobid || message.jobid !== jobId) {
+        console.warn('Mismatched or missing job ID in message:', message);
+        return;
+      }
+
+      jobStatus.value = message.type;
+
+      if (message.type === 'success') {
+        response.value = message;
+        loading.value = false;
+        progressPercent.value = 100;
+        progressMessage.value = 'Completed successfully';
+        ws.close();
+      } else if (message.type === 'failed') {
+        response.value = { error: 'Job failed', details: message };
+        loading.value = false;
+        progressMessage.value = 'Execution failed';
+        ws.close();
+      } else if (message.type === 'inProgress') {
+        jobStatus.value = 'running...';
+
+        progressPercent.value = message.progress ?? progressPercent.value;
+        progressMessage.value = message.statusText ?? progressMessage.value;
+      }
+    } catch (e) {
+      console.error('Invalid WebSocket message format:', event.data);
+    }
+  };
+
+  ws.onerror = (err) => {
+    console.error('WebSocket error', err);
+    ws.close();
+  };
+};
+
+
 const validateRequiredInputs = (): boolean => {
   for (const inputId of requiredInputs.value) {
     const val = inputValues.value[inputId]
@@ -283,13 +336,25 @@ const submitProcess = async () => {
     })
     return
   }
+
   try {
     loading.value = true
     response.value = null
     jobStatus.value = 'submitted'
 
-    const payload = JSON.parse(jsonRequestPreview.value)
+    // Update the payload BEFORE submission
+    const originalPayload = JSON.parse(jsonRequestPreview.value)
 
+    // If async mode, include the real subscriber URIs
+    if (preferMode.value === 'respond-async') {
+      originalPayload.executionOptions = {
+        subscriber: {
+          ...subscriberValues.value
+        }
+      }
+    }
+
+    // Submit execution request
     const res = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${processId}/execution`, {
       method: 'POST',
       headers: {
@@ -297,18 +362,35 @@ const submitProcess = async () => {
         'Content-Type': 'application/json',
         'Prefer': preferMode.value
       },
-      body: JSON.stringify(payload)
-    })
+      body: JSON.stringify(originalPayload)
+    });
 
     if (res.jobID) {
-      await pollJobStatus(res.jobID)
+      const jobId = res.jobID.replace(/^JOBSOCKET-/, '');
+
+      // Update subscriber URIs (can be used for logs or retry logic if needed)
+      subscriberValues.value = {
+        successUri: `http://zookernel/cgi-bin/publish.py?jobid=${jobId}&type=success`,
+        inProgressUri: `http://zookernel/cgi-bin/publish.py?jobid=${jobId}&type=inProgress`,
+        failedUri: `http://zookernel/cgi-bin/publish.py?jobid=${jobId}&type=failed`
+      };
+
+      // Start WebSocket listener
+      listenToWebSocket(jobId);
+
     } else {
-      loading.value = false
-      response.value = res
+      // For sync responses or if no job ID is returned
+      response.value = res;
+      jobStatus.value = 'successful';
     }
   } catch (error) {
-    console.error('Execution error:', error)
-    loading.value = false
+    console.error('Execution error:', error);
+    $q.notify({
+      type: 'negative',
+      message: 'Process execution failed.'
+    });
+    jobStatus.value = 'failed';
+    loading.value = false;
   }
 }
 
@@ -734,8 +816,16 @@ const removeInputField = (inputId: string, index: number) => {
       </q-dialog>
 
       <div class="q-mt-md" v-if="loading">
-        <q-linear-progress indeterminate color="primary" />
-        <div class="text-caption text-primary q-mt-sm">Execution in progress... Status: {{ jobStatus }}</div>
+        <q-linear-progress
+          v-if="loading"
+          :value="progressPercent / 100"
+          color="primary"
+          class="q-mt-md"
+        />
+        <div class="text-caption text-primary q-mt-sm">
+          Execution in progress... Status: {{ jobStatus }}<br>
+          <span v-if="progressMessage">{{ progressMessage }}</span>
+        </div>
       </div>
 
       <div class="q-mt-lg" v-if="response">
