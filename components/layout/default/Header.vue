@@ -45,18 +45,10 @@
             </q-btn>
             <q-menu>
               <q-list dense>
-                <q-item clickable v-close-popup class="q-px-lg">
+                <q-item clickable v-close-popup 
+                  :href="`${config.public.NUXT_OIDC_ISSUER}/account/?referrer=${config.public.NUXT_OIDC_CLIENT_ID}&referrer_uri=${config.public.AUTH_ORIGIN}`"
+                  class="q-px-lg">
                   <q-item-section class="q-px-sm">{{ t('Profile') }}</q-item-section>
-                </q-item>
-                <q-item clickable v-close-popup>
-                  <q-item-section class="q-px-sm">{{ t('Sample') }}</q-item-section>
-                </q-item>
-                <q-item clickable v-close-popup>
-                  <q-item-section class="q-px-sm">{{ t('Recent Activity') }}</q-item-section>
-                </q-item>
-                <q-separator/>
-                <q-item clickable v-close-popup to="/help">
-                  <q-item-section class="q-px-sm">{{ t('Help') }}</q-item-section>
                 </q-item>
                 <q-separator/>
                 <q-item clickable v-close-popup @click="showLogoutDialog">
@@ -215,8 +207,8 @@ const handleLogout = async () => {
 }
 
 onMounted(() => {
-  if (!!isLoggedUser.value && loggedUser.value.email) {
-    gravatarUrl.value = `https://www.gravatar.com/avatar/${stringToMD5(loggedUser.value.email)}/`
+  if (authStore.user && authStore.user.email) {
+    gravatarUrl.value = `https://www.gravatar.com/avatar/${stringToMD5(authStore.user.email)}/`
   }
   console.log("process.env", process.env)
 })
