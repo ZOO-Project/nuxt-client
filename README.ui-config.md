@@ -1,4 +1,4 @@
-# Nuxt + Vue + Quasar: Layout & Language Switching Guide
+# Nuxt + Vue + Quasar: Layout , Language Switching And Dynamic Menu Integration
 
 Demonstrates how to switch between `Default` and `Quasar` layouts using Pinia and cookies, as well as language switching between English and French using `vue-i18n` and cookies.
 
@@ -8,6 +8,7 @@ Demonstrates how to switch between `Default` and `Quasar` layouts using Pinia an
 
 - **Layout Switching**: Dynamic layout switching using a dropdown menu.
 - **Language Switching**: Toggle between English (`en`) and French (`fr`) using `vue-i18n`.
+- **Dynamic Menu Tabs**: Tabs are automatically generated from the OGC API `/ogc-api/` response
 - **Cookie Persistence**: Saves layout and language preferences in cookies to persist user settings across sessions.
 
 ---
@@ -22,14 +23,26 @@ layouts/
 components/
   layout/
     shared/
-      SettingsMenu.vue
+      SettingsMenu.vue - centralized language/layout switch
     default/
       Header.vue
       Footer.vue
     quasar/
       Header.vue
       Footer.vue
+
+composables/
+  utils/
+    useLandingLinks.ts - fetches dynamic tab links
 ```
+
+---
+
+## Dynamic Menu Tabs From OGC API
+
+- Implemented a dynamic approach to rendering header menu tabs based on the OGC API landing page (`/ogc-api/`)
+- Tabs are now fetched dynamically via the `useLandingLinks.ts` composable
+- Auto-generated labels (`processes.html` becomes `Processes`)
 
 ---
 
@@ -66,7 +79,7 @@ i18n: {
 }
 ```
 
-### 3. Language Dropdown in Header
+### 3. Language Switch in `SettingsMenu.vue`
 
 ```vue
 <q-select
@@ -75,7 +88,7 @@ i18n: {
   dense borderless emit-value map-options label="Language" />
 ```
 
-### 4. Vue Logic for Language Switch (in `header.vue`)
+### 4. Vue Logic 
 
 ```ts
 import { useI18n } from 'vue-i18n'
@@ -123,7 +136,7 @@ export const useLayoutStore = defineStore('layout', {
 })
 ```
 
-### Layout Logic (in `app.vue`)
+### Dynamic Layout in `app.vue`
 
 ```vue
 <template>
@@ -149,7 +162,7 @@ const layoutComponent = computed(() => {
 </script>
 ```
 
-### Layout Switcher Dropdown Example (in `header.vue`)
+### Layout Switcher in `SettingsMenu.vue`
 
 ```vue
 <q-select
@@ -159,16 +172,6 @@ const layoutComponent = computed(() => {
   label="Layout" />
 ```
 
-### Logic for Layout Switching (in `header.vue`)
-
-```ts
-const layoutStore = useLayoutStore()
-const selectedLayout = ref(layoutStore.currentLayout)
-
-watch(selectedLayout, (newLayout) => {
-  layoutStore.setLayout(newLayout)
-})
-```
 
 ## How Switching Works
 
@@ -184,6 +187,8 @@ watch(selectedLayout, (newLayout) => {
 - Include layout and language switchers in both layouts (`Default`, `Quasar`).
 - Use `<NuxtPage />` inside `<q-page-container>` in each layout.
 - Layout and language are persisted with cookies: `selected_layout`, `i18n_redirected`.
+- Add any new `.html` link on the backend (OGC API), and it will automatically show in the tab menu
+- Use `autoLabel()` in the code to convert links like `jobs.html` - `Jobs` dynamically
 
 ---
 
