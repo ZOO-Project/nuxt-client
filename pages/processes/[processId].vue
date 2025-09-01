@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRuntimeConfig } from '#imports'
 import { triggerRef } from 'vue'
@@ -40,6 +40,44 @@ const subscriberValues = ref({
 })
 
 
+// Detects whether a schema describes complex content (has contentMediaType / mediaType / oneOf with contentMediaType)
+const hasContentMedia = (schema: any) =>
+  !!(
+    schema?.contentMediaType ||
+    schema?.mediaType ||
+    (Array.isArray(schema?.oneOf) && schema.oneOf.some((f: any) => !!f?.contentMediaType))
+  )
+
+// Collect supported formats (oneOf contentMediaType or contentMediaType field). Ensure application/json is present.
+const getSupportedFormats = (schema: any): string[] => {
+  const list: string[] = []
+
+  if (Array.isArray(schema?.oneOf)) {
+    for (const f of schema.oneOf) {
+      if (f?.contentMediaType) list.push(f.contentMediaType)
+      else if (f?.type === 'object') list.push('application/json')
+    }
+  }
+
+  if (schema?.contentMediaType) list.push(schema.contentMediaType)
+  if (schema?.mediaType) list.push(schema.mediaType)
+
+  if (!list.includes('application/json')) list.push('application/json')
+  // unique
+  return Array.from(new Set(list))
+}
+
+// Provide a readable label for the q-badge (so complex shows the media type)
+const typeLabel = (input: any, valForInputId: any) => {
+  if (hasContentMedia(input.schema)) {
+    // If we have a selected format on the first item, show it
+    const arr = Array.isArray(valForInputId) ? valForInputId : []
+    const fmt = arr[0]?.format || input.schema?.contentMediaType || input.schema?.mediaType
+    return fmt ? `complex (${fmt})` : 'complex'
+  }
+  return input?.schema?.type || 'literal'
+}
+
 const fetchData = async () => {
   try {
     data.value = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${processId}`, {
@@ -50,36 +88,40 @@ const fetchData = async () => {
 
     if (data.value && data.value.inputs) {
       for (const [key, input] of Object.entries(data.value.inputs)) {
-        console.log(input)
-        console.log('isComplexInput:', input, isComplexInput(input))
         if (input.minOccurs === undefined && input.maxOccurs === undefined) {
           requiredInputs.value.push(key)
         }
-        // Complex input
-        if (
-          input?.schema?.contentMediaType ||
-          input?.schema?.mediaType ||
-          (input?.schema?.oneOf?.some(f => f.contentMediaType))
-        ) {
-          const supportedFormats = (
-            input.schema.oneOf?.map(f => f.contentMediaType).filter(Boolean) || []
-          );
 
-          if (!supportedFormats.includes('application/json')) {
-            supportedFormats.push('application/json');
-          }
+        // COMPLEX input (single or oneOf/contentMediaType)
+        if (hasContentMedia(input.schema)) {
+          const supportedFormats = getSupportedFormats(input.schema)
           const hrefOptions = input?.example?.hrefOptions || []
           inputValues.value[key] = [
-          {
-            mode: hrefOptions.length > 0 ? 'href' : 'value',
-            href: '',
-            value: '',
-            format: supportedFormats[0],
-            availableFormats: supportedFormats,
-            hrefOptions
-          }
-        ]
-          continue;
+            {
+              mode: hrefOptions.length > 0 ? 'href' : 'value',
+              href: '',
+              value: '',
+              format: supportedFormats[0],
+              availableFormats: supportedFormats,
+              hrefOptions
+            }
+          ]
+          continue
+        }
+
+        // COMPLEX ARRAY input
+        if (input.schema?.type === 'array' && hasContentMedia(input.schema.items)) {
+          const supportedFormats = getSupportedFormats(input.schema.items)
+          inputValues.value[key] = [
+            {
+              mode: 'value',
+              href: '',
+              value: '',
+              format: supportedFormats[0],
+              availableFormats: supportedFormats
+            }
+          ]
+          continue
         }
 
         // Bounding Box input
@@ -95,17 +137,9 @@ const fetchData = async () => {
           continue
         }
 
-        // Multiple inputs (array)
+        // Multiple literal inputs (array but not complex)
         if (input.schema?.type === 'array') {
-          inputValues.value[key] = [
-           {
-              mode: 'href',
-              href: '',
-              value: '',
-              format: supportedFormats[0],
-              availableFormats: supportedFormats
-            }
-          ];
+          inputValues.value[key] = ['']
           continue
         }
 
@@ -113,6 +147,8 @@ const fetchData = async () => {
         inputValues.value[key] = input.schema?.default ?? (input.schema?.type === 'number' ? 0 : '')
       }
     }
+
+    // Outputs initialization
     if (data.value && data.value.outputs) {
       for (const [key, input] of Object.entries(data.value.outputs)) {
         if (input.schema.oneOf?.length > 0) {
@@ -175,14 +211,17 @@ watch([inputValues, outputValues, subscriberValues], ([newInputs, newOutputs, ne
   for (const [key, val] of Object.entries(newInputs)) {
     // If multiple inputs (array)
     if (Array.isArray(val)) {
-      formattedInputs[key] = val.map(v => {
-        if (v.mode === 'href') {
-          return { href: v.href }
-        } else {
-          return { value: v.value }
+      formattedInputs[key] = val.map((v: any) => {
+        if (v && typeof v === 'object' && ('mode' in v)) {
+          // complex or complex-array item
+          if (v.mode === 'href') return { href: v.href }
+          return { value: v.value, format: { mediaType: v.format } }
         }
+        // literal array item (primitive)
+        return v
       })
-    } else if (val && typeof val === 'object' && 'mode' in val) {
+    }
+    else if (val && typeof val === 'object' && 'mode' in val) {
       formattedInputs[key] = val.mode === 'href'
         ? { href: val.href }
         : { value: val.value, format: { mediaType: val.format } }
@@ -285,8 +324,6 @@ const listenToWebSocket = (jobId: string) => {
     ws?.close()
   }
 }
-
-
 
 
 const validateRequiredInputs = (): boolean => {
@@ -510,7 +547,7 @@ const removeInputField = (inputId: string, index: number) => {
             <!-- <div class="text-blue text-bold q-mb-sm">{{ inputId.toUpperCase() }}</div> -->
             <div class="q-gutter-sm">
               <q-badge color="grey-3" text-color="black" class="q-mb-sm">
-                {{ input.schema?.type || 'text' }}
+                {{ typeLabel(input, inputValues[inputId]) }}
               </q-badge>
 
               <!-- Complex + Multiple input -->
