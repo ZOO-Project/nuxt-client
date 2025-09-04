@@ -2,12 +2,12 @@
   <q-page class="q-pa-md">
     <div class="row justify-center">
       <div class="col-12" style="max-width: 800px;">
-        <p class="text-h4 q-mb-md text-weight-bold">Conformance Classes</p>
+        <p class="text-h4 q-mb-md text-weight-bold">{{ t('Conformance Classes') }}</p>
 
         <q-card class="q-pa-md shadow-2 rounded-borders">
           <q-card-section>
             <p class="text-body1 q-mb-md">
-              Below are the supported conformance classes for this API:
+              {{ t('Below are the supported conformance classes for this API:') }}
             </p>
             <q-list bordered separator>
               <q-item
@@ -31,12 +31,13 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRuntimeConfig } from '#imports'
+import { useAuthStore } from '~/stores/auth'
+import { useI18n } from 'vue-i18n'
 
 const conformanceLinks = ref([])
-
-
 const config = useRuntimeConfig()
-
+const authStore = useAuthStore()
+const { locale, t } = useI18n()
 
 
 onMounted(async () => {
