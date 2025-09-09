@@ -42,7 +42,12 @@ const { locale, t } = useI18n()
 
 onMounted(async () => {
   try {
-    const response = await fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/conformance`)
+    const response = await fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/conformance`, {
+      headers: {
+        Authorization: `Bearer ${authStore.token.access_token}`,
+        'Accept-Language': locale.value
+      }
+    })
     const data = await response.json()
     conformanceLinks.value = data.conformsTo || []
   } catch (error) {
