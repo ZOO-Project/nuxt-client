@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRuntimeConfig } from '#imports'
 import { triggerRef } from 'vue'
-import { uuid } from 'vue-uuid'
+import { uuid } from 'vue-uuid';
+import { useQuasar } from 'quasar'
+import HelpDialog from '@/components/help/HelpDialog.vue'
+import processIdHelp from '@/components/help/processIdHelp.js'
+
 
 const {
   params: { processId }
@@ -28,15 +32,55 @@ const progressPercent = ref(0)
 const progressMessage = ref('')
 const jobId = ref("");
 const channelId = ref(uuid.v1());
-
-
+const $q = useQuasar()
+let ws: WebSocket | null = null
+const helpVisible = ref(false)
+const helpContent = processIdHelp
 
 const subscriberValues = ref({
-  successUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-'+channelId.value+'&type=success',
-  inProgressUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-'+channelId.value+'&type=inProgress',
-  failedUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-'+channelId.value+'&type=failed'
+  successUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=success',
+  inProgressUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=inProgress',
+  failedUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=failed'
 })
 
+
+// Detects whether a schema describes complex content (has contentMediaType / mediaType / oneOf with contentMediaType)
+const hasContentMedia = (schema: any) =>
+  !!(
+    schema?.contentMediaType ||
+    schema?.mediaType ||
+    (Array.isArray(schema?.oneOf) && schema.oneOf.some((f: any) => !!f?.contentMediaType))
+  )
+
+// Collect supported formats (oneOf contentMediaType or contentMediaType field). Ensure application/json is present.
+const getSupportedFormats = (schema: any): string[] => {
+  const list: string[] = []
+
+  if (Array.isArray(schema?.oneOf)) {
+    for (const f of schema.oneOf) {
+      if (f?.contentMediaType) list.push(f.contentMediaType)
+      else if (f?.type === 'object') list.push('application/json')
+    }
+  }
+
+  if (schema?.contentMediaType) list.push(schema.contentMediaType)
+  if (schema?.mediaType) list.push(schema.mediaType)
+
+  if (!list.includes('application/json')) list.push('application/json')
+  // unique
+  return Array.from(new Set(list))
+}
+
+// Provide a readable label for the q-badge (so complex shows the media type)
+const typeLabel = (input: any, valForInputId: any) => {
+  if (hasContentMedia(input.schema)) {
+    // If we have a selected format on the first item, show it
+    const arr = Array.isArray(valForInputId) ? valForInputId : []
+    const fmt = arr[0]?.format || input.schema?.contentMediaType || input.schema?.mediaType
+    return fmt ? `complex (${fmt})` : 'complex'
+  }
+  return input?.schema?.type || 'literal'
+}
 
 const fetchData = async () => {
   try {
@@ -48,36 +92,54 @@ const fetchData = async () => {
 
     if (data.value && data.value.inputs) {
       for (const [key, input] of Object.entries(data.value.inputs)) {
-        console.log(input)
-        console.log('isComplexInput:', input, isComplexInput(input))
         if (input.minOccurs === undefined && input.maxOccurs === undefined) {
           requiredInputs.value.push(key)
         }
-        // Complex input
-        if (
-          input?.schema?.contentMediaType ||
-          input?.schema?.mediaType ||
-          (input?.schema?.oneOf?.some(f => f.contentMediaType))
-        ) {
-          const supportedFormats = (
-            input.schema.oneOf?.map(f => f.contentMediaType).filter(Boolean) || []
-          );
 
-          if (!supportedFormats.includes('application/json')) {
-            supportedFormats.push('application/json');
-          }
+        // COMPLEX input (single or oneOf/contentMediaType)
+        if (hasContentMedia(input.schema)) {
+          const supportedFormats = getSupportedFormats(input.schema)
           const hrefOptions = input?.example?.hrefOptions || []
-          inputValues.value[key] = [
-          {
-            mode: hrefOptions.length > 0 ? 'href' : 'value',
-            href: '',
-            value: '',
-            format: supportedFormats[0],
-            availableFormats: supportedFormats,
-            hrefOptions
+
+          if (input.maxOccurs && input.maxOccurs > 1) {
+            // multiple allowed → array
+            inputValues.value[key] = [
+              {
+                mode: hrefOptions.length > 0 ? 'href' : 'value',
+                href: '',
+                value: '',
+                format: supportedFormats[0],
+                availableFormats: supportedFormats,
+                hrefOptions
+              }
+            ]
+          } else {
+            // single input → object
+            inputValues.value[key] = {
+              mode: hrefOptions.length > 0 ? 'href' : 'value',
+              href: '',
+              value: '',
+              format: supportedFormats[0],
+              availableFormats: supportedFormats,
+              hrefOptions
+            }
           }
-        ]
-          continue;
+          continue
+        }
+
+        // COMPLEX ARRAY input
+        if (input.schema?.type === 'array' && hasContentMedia(input.schema.items)) {
+          const supportedFormats = getSupportedFormats(input.schema.items)
+          inputValues.value[key] = [
+            {
+              mode: 'value',
+              href: '',
+              value: '',
+              format: supportedFormats[0],
+              availableFormats: supportedFormats
+            }
+          ]
+          continue
         }
 
         // Bounding Box input
@@ -93,17 +155,9 @@ const fetchData = async () => {
           continue
         }
 
-        // Multiple inputs (array)
+        // Multiple literal inputs (array but not complex)
         if (input.schema?.type === 'array') {
-          inputValues.value[key] = [
-           {
-              mode: 'href',
-              href: '',
-              value: '',
-              format: supportedFormats[0],
-              availableFormats: supportedFormats
-            }
-          ];
+          inputValues.value[key] = ['']
           continue
         }
 
@@ -111,6 +165,8 @@ const fetchData = async () => {
         inputValues.value[key] = input.schema?.default ?? (input.schema?.type === 'number' ? 0 : '')
       }
     }
+
+    // Outputs initialization
     if (data.value && data.value.outputs) {
       for (const [key, input] of Object.entries(data.value.outputs)) {
         if (input.schema.oneOf?.length > 0) {
@@ -173,17 +229,24 @@ watch([inputValues, outputValues, subscriberValues], ([newInputs, newOutputs, ne
   for (const [key, val] of Object.entries(newInputs)) {
     // If multiple inputs (array)
     if (Array.isArray(val)) {
-      formattedInputs[key] = val.map(v => {
-        if (v.mode === 'href') {
-          return { href: v.href }
-        } else {
-          return { value: v.value }
-        }
-      })
-    } else if (val && typeof val === 'object' && 'mode' in val) {
+      // If it's a literal string/number array → just return plain values
+      if (val.every(v => typeof v === "string" || typeof v === "number")) {
+        formattedInputs[key] = val
+      } else {
+        // Complex array case (with mode/value/format)
+        formattedInputs[key] = val.map((v: any) => {
+          if (v && typeof v === "object" && "mode" in v) {
+            if (v.mode === "href") return { href: v.href }
+            return { value: v.value, format: { mediaType: v.format } }
+          }
+          return v
+        })
+      }
+    }
+    else if (val && typeof val === 'object' && 'mode' in val) {
       formattedInputs[key] = val.mode === 'href'
         ? { href: val.href }
-        : { value: val.value, format: { mediaType: val.format } }
+        : { value: val.value, format: { mediaType: val.format?.mediaType ?? val.format } }
     } else {
       formattedInputs[key] = val
     }
@@ -231,65 +294,63 @@ const pollJobStatus = async (jobId: string) => {
   }
 }
 
-const listenToWebSocket = (jobId: string) => {
-  const wsUrl = `ws://${window.location.hostname}:8888/`;
-  const ws = new WebSocket(wsUrl);
+const listenToWebSocket = () => {
+  const wsUrl = `ws://${window.location.hostname}:8888/`
+  
+  // Reuse or create WebSocket
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    ws = new WebSocket(wsUrl)
+  }
 
   ws.onopen = () => {
-    console.log("WebSocket connected");
-    const subscriptionId = jobId.startsWith("JOBSOCKET-") ? jobId : `JOBSOCKET-${jobId}`;
-    ws.send("SUB " + subscriptionId);
-    console.log("Subscribed to:", subscriptionId);
-  };
+    console.log("WebSocket connected")
+    if (channelId.value) {
+      ws!.send("SUB JOBSOCKET-" + channelId.value)
+      console.log("Subscribed to JOBSOCKET-" + channelId.value)
+    } else {
+      console.warn("No channelId available to subscribe.")
+    }
+  }
 
   ws.onmessage = (event) => {
-    console.log("Raw WebSocket message:", event.data);
-
-    // Only handle updates (handshake is not used to create jobs anymore)
-    if (event.data === "1") {
-      console.log("Server handshake received – waiting for job updates...");
-      return;
-    }
-
     try {
-      const message = JSON.parse(event.data);
+      const message = JSON.parse(event.data)
+      if (!channelId.value) return
+      if (message.jobid !== "JOBSOCKET-" + channelId.value) return
 
-      if (!message.jobid || message.jobid.replace(/^JOBSOCKET-/, "") !== jobId) {
-        console.warn("Mismatched or missing job ID in message:", message);
-        return;
-      }
+      // Update progress
+      if (message.progress !== undefined) progressPercent.value = message.progress
+      if (message.message) progressMessage.value = message.message
 
-      
       if (message.type === "success" || message.status === "successful") {
-        response.value = message;
-        jobStatus.value = "successful";
-        loading.value = false;
-        progressPercent.value = 100;
-        progressMessage.value = "Completed successfully";
-        ws.close();
-      } else if (message.type === "failed" || message.status === "failed") {
-        response.value = { error: "Job failed", details: message };
-        jobStatus.value = "failed";
-        loading.value = false;
-        progressMessage.value = "Execution failed";
-        ws.close();
-      } else {
-        jobStatus.value = "running...";
-        progressPercent.value = message.progress ?? progressPercent.value;
-        progressMessage.value = message.message ?? message.statusText ?? progressMessage.value;
+        progressPercent.value = 100
+        progressMessage.value = "Completed successfully"
+        jobStatus.value = "successful"
+        response.value = message
+        loading.value = false
+        ws?.close()
+      } 
+      else if (message.type === "failed" || message.status === "failed") {
+        progressMessage.value = "Execution failed"
+        jobStatus.value = "failed"
+        response.value = { error: "Job failed", details: message }
+        loading.value = false
+        ws?.close()
+      } 
+      else {
+        jobStatus.value = "running..."
       }
     } catch (e) {
-      console.error("Invalid WebSocket message format:", event.data);
+      console.error("Invalid WebSocket message:", event.data)
     }
-  };
+  }
 
   ws.onerror = (err) => {
-    console.error("WebSocket error", err);
-    ws.close();
-  };
-};
-
-
+    console.error("WebSocket error", err)
+    progressMessage.value = "WebSocket connection error"
+    ws?.close()
+  }
+}
 
 
 const validateRequiredInputs = (): boolean => {
@@ -356,22 +417,21 @@ const submitProcess = async () => {
     loading.value = true
     response.value = null
     jobStatus.value = 'submitted'
+    progressPercent.value = 0
+    progressMessage.value = "Submitting job..."
 
-    // Update the payload BEFORE submission
+    // Build request payload
     const originalPayload = JSON.parse(jsonRequestPreview.value)
-
-    // If async mode, include the real subscriber URIs
     if (preferMode.value === 'respond-async') {
       originalPayload.executionOptions = {
-        subscriber: {
-          ...subscriberValues.value
-        }
+        subscriber: { ...subscriberValues.value }
       }
     }
-      // Start WebSocket listener
+
       listenToWebSocket(channelId.value);
 
-    // Submit execution request
+
+    // Send job request
     const res = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${processId}/execution`, {
       method: 'POST',
       headers: {
@@ -380,33 +440,53 @@ const submitProcess = async () => {
         'Prefer': preferMode.value
       },
       body: JSON.stringify(originalPayload)
-    });
+    })
 
     if (res.jobID) {
-      const jobId = res.jobID.replace(/^JOBSOCKET-/, '');
+      //  Correct jobId
+      const jobId = res.jobID.replace(/^JOBSOCKET-/, '')
 
-      // Update subscriber URIs (can be used for logs or retry logic if needed)
-      subscriberValues.value = {
-        successUri: `http://zookernel/cgi-bin/publish.py?jobid=${jobId}&type=success`,
-        inProgressUri: `http://zookernel/cgi-bin/publish.py?jobid=${jobId}&type=inProgress`,
-        failedUri: `http://zookernel/cgi-bin/publish.py?jobid=${jobId}&type=failed`
-      }; 
+      let gotRealProgress = false
+
+      const interval = setInterval(() => {
+        if (!gotRealProgress && progressPercent.value < 90 && loading.value) {
+          progressPercent.value += 10
+        } else {
+          clearInterval(interval)
+        }
+      }, 1000)
+
+      //  Listen for real updates
+      // listenToWebSocket(jobId)
+
+      const oldOnMessage = ws?.onmessage
+      if (ws) {
+        ws.onmessage = (event) => {
+          gotRealProgress = true
+          oldOnMessage?.(event)
+        }
+      }
 
     } else {
-      // For sync responses or if no job ID is returned
-      response.value = res;
-      jobStatus.value = 'successful';
+      // Sync mode → job completed immediately
+      response.value = res
+      jobStatus.value = 'successful'
+      progressPercent.value = 100
+      loading.value = false
     }
+
   } catch (error) {
-    console.error('Execution error:', error);
+    console.error('Execution error:', error)
     $q.notify({
       type: 'negative',
       message: 'Process execution failed.'
-    });
-    jobStatus.value = 'failed';
-    loading.value = false;
+    })
+    jobStatus.value = 'failed'
+    progressMessage.value = 'Execution failed'
+    loading.value = false
   }
 }
+
 
 const isMultipleInput = (input: any) => {
   return input.maxOccurs && input.maxOccurs > 1
@@ -461,6 +541,20 @@ const removeInputField = (inputId: string, index: number) => {
 </script>
 
 <template>
+  <div>
+    <q-btn
+      flat
+      icon="help_outline"
+      color="primary"
+      label="Help"
+      @click="helpVisible = true"
+      class="q-mb-md"
+    />
+    
+    <HelpDialog
+      v-model="helpVisible"
+      :help-content="helpContent"
+    />
   <q-page class="q-pa-md">
     <div v-if="data">
    
@@ -497,79 +591,18 @@ const removeInputField = (inputId: string, index: number) => {
             <!-- <div class="text-blue text-bold q-mb-sm">{{ inputId.toUpperCase() }}</div> -->
             <div class="q-gutter-sm">
               <q-badge color="grey-3" text-color="black" class="q-mb-sm">
-                {{ input.schema?.type || 'text' }}
+                {{ typeLabel(input, inputValues[inputId]) }}
               </q-badge>
 
-              <!-- Complex + Multiple input -->
-              <template v-if="isComplexInput(input) && Array.isArray(inputValues[inputId])">
-                <div
-                  v-for="(item, idx) in inputValues[inputId]"
-                  :key="idx"
-                  class="q-gutter-sm q-mb-md"
-                >
-                  <q-option-group
-                    v-model="inputValues[inputId][idx].mode"
-                    :options="[
-                      { label: 'Provide URL (href)', value: 'href' },
-                      { label: 'Provide Value Inline', value: 'value' }
-                    ]"
-                    type="radio"
-                    inline
-                  />
-
-                  <template v-if="item.mode === 'href'">
-                    <q-option-group
-                      v-if="item.hrefOptions && item.hrefOptions.length > 0"
-                      v-model="item.href"
-                      :options="item.hrefOptions.map(h => ({ label: h, value: h }))"
-                      type="radio"
-                      inline
-                    />
-                    <q-input
-                      v-else
-                      v-model="item.href"
-                      label="Reference URL (href)"
-                      filled
-                      dense
-                    />
-                  </template>
-
-                  <div v-else>
-                    <q-select
-                      v-model="item.format"
-                      :options="item.availableFormats"
-                      label="Content Format"
-                      dense
-                      filled
-                    />
-                    <q-input
-                      v-model="item.value"
-                      label="Input Value"
-                      type="textarea"
-                      autogrow
-                      filled
-                      dense
-                    />
+              <!-- Complex Input (Multiple or Single) -->
+              <template v-if="isComplexInput(input)">
+                <!-- Multiple Complex Input -->
+                <template v-if="Array.isArray(inputValues[inputId])">
+                  <div v-for="(item, idx) in inputValues[inputId]" :key="idx" class="q-gutter-sm q-mb-md">
+                    <!-- existing rendering for array -->
                   </div>
-
                   <q-btn
-                    icon="delete"
-                    round
-                    dense
-                    flat
-                    color="red"
-                    size="sm"
-                    class="q-mt-sm"
-                    @click="removeInputField(inputId, idx)"
-                    v-if="inputValues[inputId].length > 1"
-                  >
-                    <q-tooltip>Remove</q-tooltip>
-                  </q-btn>
-                </div>
-
-                <!-- Add another input button -->
-                <template v-if="isMultipleInput(input)">
-                  <q-btn
+                    v-if="isMultipleInput(input)"
                     flat
                     icon="add"
                     label="Add Another"
@@ -577,6 +610,52 @@ const removeInputField = (inputId: string, index: number) => {
                     size="sm"
                     class="q-mt-sm"
                   />
+                </template>
+
+                <!-- Single Complex Input -->
+                <template v-else>
+                  <q-option-group
+                    v-model="inputValues[inputId].mode"
+                    :options="[
+                      { label: 'Provide URL (href)', value: 'href' },
+                      { label: 'Provide Value Inline', value: 'value' }
+                    ]"
+                    type="radio"
+                    inline
+                  />
+                  <template v-if="inputValues[inputId].mode === 'href'">
+                    <q-option-group
+                      v-if="inputValues[inputId].hrefOptions && inputValues[inputId].hrefOptions.length > 0"
+                      v-model="inputValues[inputId].href"
+                      :options="inputValues[inputId].hrefOptions.map(h => ({ label: h, value: h }))"
+                      type="radio"
+                      inline
+                    />
+                    <q-input
+                      v-else
+                      v-model="inputValues[inputId].href"
+                      label="Reference URL (href)"
+                      filled
+                      dense
+                    />
+                  </template>
+                  <div v-else>
+                    <q-select
+                      v-model="inputValues[inputId].format"
+                      :options="inputValues[inputId].availableFormats"
+                      label="Content Format"
+                      dense
+                      filled
+                    />
+                    <q-input
+                      v-model="inputValues[inputId].value"
+                      label="Input Value"
+                      type="textarea"
+                      autogrow
+                      filled
+                      dense
+                    />
+                  </div>
                 </template>
               </template>
 
@@ -837,8 +916,8 @@ const removeInputField = (inputId: string, index: number) => {
           class="q-mt-md"
         />
         <div class="text-caption text-primary q-mt-sm">
-          Execution in progress... Status: {{ jobStatus }}<br>
           <span v-if="progressMessage">{{ progressMessage }}</span>
+          <span v-else>Status: {{ jobStatus }}</span>
         </div>
       </div>
 
@@ -852,4 +931,5 @@ const removeInputField = (inputId: string, index: number) => {
     </div>
     <q-spinner v-else />
   </q-page>
+  </div>
 </template>
