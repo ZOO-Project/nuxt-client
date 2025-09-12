@@ -71,13 +71,28 @@ const getSupportedFormats = (schema: any): string[] => {
   return Array.from(new Set(list))
 }
 
-// Provide a readable label for the q-badge (so complex shows the media type)
+
+// Provide a readable label for the q-badge (so complex shows the media type OR href/value mode)
 const typeLabel = (input: any, valForInputId: any) => {
   if (hasContentMedia(input.schema)) {
-    // If we have a selected format on the first item, show it
-    const arr = Array.isArray(valForInputId) ? valForInputId : []
-    const fmt = arr[0]?.format || input.schema?.contentMediaType || input.schema?.mediaType
-    return fmt ? `complex (${fmt})` : 'complex'
+    // Handle array case (multiple complex inputs)
+    if (Array.isArray(valForInputId)) {
+      const item = valForInputId[0]
+      if (item?.mode === 'href') return 'complex (provide URL)'
+      if (item?.mode === 'value') {
+        const fmt = item?.format
+        return fmt ? `complex (${fmt})` : 'Provide Value Inline'
+      }
+    }
+    // Handle single complex input
+    else if (valForInputId && typeof valForInputId === 'object') {
+      if (valForInputId.mode === 'href') return 'complex (provide URL)'
+      if (valForInputId.mode === 'value') {
+        const fmt = valForInputId?.format
+        return fmt ? `complex (${fmt})` : 'Provide Value Inline'
+      }
+    }
+    return 'complex'
   }
   return input?.schema?.type || 'literal'
 }
@@ -536,8 +551,6 @@ const removeInputField = (inputId: string, index: number) => {
     triggerRef(inputValues)
   }
 }
-
-
 </script>
 
 <template>
@@ -599,8 +612,67 @@ const removeInputField = (inputId: string, index: number) => {
                 <!-- Multiple Complex Input -->
                 <template v-if="Array.isArray(inputValues[inputId])">
                   <div v-for="(item, idx) in inputValues[inputId]" :key="idx" class="q-gutter-sm q-mb-md">
-                    <!-- existing rendering for array -->
+                    <q-option-group
+                      v-model="item.mode"
+                      :options="[
+                        { label: 'Provide URL (href)', value: 'href' },
+                        { label: 'Provide Value Inline', value: 'value' }
+                      ]"
+                      type="radio"
+                      inline
+                    />
+
+                    <template v-if="item.mode === 'href'">
+                      <q-option-group
+                        v-if="item.hrefOptions && item.hrefOptions.length > 0"
+                        v-model="item.href"
+                        :options="item.hrefOptions.map(h => ({ label: h, value: h }))"
+                        type="radio"
+                        inline
+                      />
+                      <q-input
+                        v-else
+                        v-model="item.href"
+                        label="Reference URL (href)"
+                        filled
+                        dense
+                      />
+                    </template>
+
+                    <div v-else>
+                      <q-select
+                        v-model="item.format"
+                        :options="item.availableFormats"
+                        label="Content Format"
+                        dense
+                        filled
+                      />
+                      <q-input
+                        v-model="item.value"
+                        label="Input Value"
+                        type="textarea"
+                        autogrow
+                        filled
+                        dense
+                      />
+                    </div>
+
+                    <!-- Remove button -->
+                    <q-btn
+                      icon="delete"
+                      round
+                      dense
+                      flat
+                      color="red"
+                      size="sm"
+                      @click="removeInputField(inputId, idx)"
+                      v-if="inputValues[inputId].length > 1"
+                    >
+                      <q-tooltip>Remove</q-tooltip>
+                    </q-btn>
                   </div>
+
+                  <!-- Add button -->
                   <q-btn
                     v-if="isMultipleInput(input)"
                     flat
