@@ -13,8 +13,10 @@ const {
   params: { processId }
 } = useRoute()
 
+
 const authStore = useAuthStore()
 const config = useRuntimeConfig()
+
 
 const data = ref(null)
 const inputValues = ref<Record<string, Array<{ mode: 'value' | 'href', value: string, href: string }>>>({})
@@ -105,6 +107,7 @@ const fetchData = async () => {
       }
     })
 
+
     if (data.value && data.value.inputs) {
       for (const [key, input] of Object.entries(data.value.inputs)) {
         if (input.minOccurs === undefined && input.maxOccurs === undefined) {
@@ -157,6 +160,7 @@ const fetchData = async () => {
           continue
         }
 
+
         // Bounding Box input
         if (
           input.schema?.type === 'object' &&
@@ -175,6 +179,7 @@ const fetchData = async () => {
           inputValues.value[key] = ['']
           continue
         }
+
 
         // Default init for literal input
         inputValues.value[key] = input.schema?.default ?? (input.schema?.type === 'number' ? 0 : '')
@@ -208,16 +213,20 @@ const fetchData = async () => {
   }
 }
 
+
 onMounted(() => {
   fetchData()
 })
 
+
 const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
   const result: Record<string, any> = {}
+  
   
   for (const [key, outputArray] of Object.entries(outputs)) {
     if (outputArray && outputArray.length > 0) {
       const outputConfig: any = {}
+      
       
       // Parcourir chaque élément du tableau
       outputArray.forEach(item => {
@@ -230,16 +239,20 @@ const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
         }
       })
       
+      
       result[key] = outputConfig
     }
   }
   return result
 }
 
+
 watch([inputValues, outputValues, subscriberValues], ([newInputs, newOutputs, newSubscribers]) => {
   console.log('Outputs changed:', newOutputs)
 
+
   const formattedInputs: Record<string, any> = {}
+
 
   for (const [key, val] of Object.entries(newInputs)) {
     // If multiple inputs (array)
@@ -267,6 +280,7 @@ watch([inputValues, outputValues, subscriberValues], ([newInputs, newOutputs, ne
     }
   }
 
+
   const payload = {
     inputs: formattedInputs,
     outputs: convertOutputsToPayload(newOutputs),
@@ -279,16 +293,19 @@ watch([inputValues, outputValues, subscriberValues], ([newInputs, newOutputs, ne
   jsonRequestPreview.value = JSON.stringify(payload, null, 2)
 }, { deep: true })
 
+
 const pollJobStatus = async (jobId: string) => {
   const jobUrl = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId}`
   const headers = {
     Authorization: `Bearer ${authStore.token.access_token}`
   }
 
+
   while (true) {
     try {
       const job = await $fetch(jobUrl, { headers })
       jobStatus.value = job.status
+
 
       if (job.status === 'successful') {
         response.value = job
@@ -299,6 +316,7 @@ const pollJobStatus = async (jobId: string) => {
         loading.value = false
         break
       }
+
 
       await new Promise(resolve => setTimeout(resolve, 2000))
     } catch (err) {
@@ -316,9 +334,11 @@ const validateRequiredInputs = (): boolean => {
   for (const inputId of requiredInputs.value) {
     const val = inputValues.value[inputId]
 
+
     if (val === undefined || val === '' || (Array.isArray(val) && val.every(v => !v.value && !v.href))) {
       return false
     }
+
 
     // Bounding box case
     if (val && typeof val === 'object' && 'bbox' in val) {
@@ -328,8 +348,10 @@ const validateRequiredInputs = (): boolean => {
     }
   }
 
+
   return true
 }
+
 
 function setInputRef(id: string, el: HTMLElement | null) {
   if (el) {
@@ -337,20 +359,25 @@ function setInputRef(id: string, el: HTMLElement | null) {
   }
 }
 
+
 function validateAndSubmit() {
   validationErrors.value = {}
 
+
   let firstInvalid: string | null = null
+
 
   for (const key of requiredInputs.value) {
     const value = inputValues.value[key]
     const isEmpty = Array.isArray(value) ? value.length === 0 : !value
+
 
     if (isEmpty) {
       validationErrors.value[key] = true
       if (!firstInvalid) firstInvalid = key
     }
   }
+
 
   if (firstInvalid) {
     const el = inputRefs.value[firstInvalid]
@@ -359,6 +386,7 @@ function validateAndSubmit() {
     }
     return
   }
+
 
   submitProcess()
 }
@@ -516,11 +544,13 @@ const isMultipleInput = (input: any) => {
   return input.maxOccurs && input.maxOccurs > 1
 }
 
+
 const isBoundingBoxInput = (input: any) => {
   return input.schema?.type === 'object' &&
          input.schema?.properties?.bbox?.type === 'array' &&
          input.schema?.properties?.crs?.type === 'string';
 }
+
 
 const isComplexInput = (input: any) => {
   return (
@@ -535,13 +565,19 @@ const isComplexInput = (input: any) => {
 
 const DEFAULT_SUPPORTED_FORMATS = ['application/json', 'text/plain'] 
 
+
+const DEFAULT_SUPPORTED_FORMATS = ['application/json', 'text/plain'] 
+
 const addInputField = (inputId: string) => {
+
 
   if (!Array.isArray(inputValues.value[inputId])) {
     inputValues.value[inputId] = []
   }
 
+
   const currentFormats = inputValues.value[inputId][0]?.availableFormats || DEFAULT_SUPPORTED_FORMATS
+
 
   inputValues.value[inputId].push({
     mode: 'value',
@@ -551,8 +587,10 @@ const addInputField = (inputId: string) => {
     availableFormats: currentFormats
   })
 
+
   triggerRef(inputValues)
 }
+
 
 const removeInputField = (inputId: string, index: number) => {
   if (Array.isArray(inputValues.value[inputId]) && inputValues.value[inputId].length > 1) {
@@ -561,6 +599,7 @@ const removeInputField = (inputId: string, index: number) => {
   }
 }
 </script>
+
 
 <template>
   <div>
@@ -590,9 +629,12 @@ const removeInputField = (inputId: string, index: number) => {
         <q-separator class="q-mt-md" />
       </div>
 
+
       <!-- <h4>{{ data.id }} - {{ data.description }}</h4> -->
 
+
       <q-form @submit.prevent="validateAndSubmit">
+
 
         <div class="q-mb-lg">
           <div class="text-h4 text-weight-bold text-primary q-mb-sm">
@@ -600,6 +642,7 @@ const removeInputField = (inputId: string, index: number) => {
           </div>
           <q-separator class="q-mt-md" />
         </div>
+
 
         <div v-for="(input, inputId) in data.inputs" :key="inputId" class="q-mb-md">
           <q-card class="q-pa-md" :ref="el => setInputRef(inputId, el)">
@@ -609,6 +652,7 @@ const removeInputField = (inputId: string, index: number) => {
                 <span v-if="requiredInputs.includes(inputId)" class="text-red">*</span>
               </div>
             </div>
+
 
             <!-- <div class="text-blue text-bold q-mb-sm">{{ inputId.toUpperCase() }}</div> -->
             <div class="q-gutter-sm">
@@ -740,6 +784,7 @@ const removeInputField = (inputId: string, index: number) => {
                 </template>
               </template>
 
+
               <!-- Bounding Box Input -->
               <template v-else-if="isBoundingBoxInput(input)">
                 <div class="q-gutter-md">
@@ -765,6 +810,7 @@ const removeInputField = (inputId: string, index: number) => {
                   />
                 </div>
               </template>
+
 
               <!-- Multiple input array -->
               <template v-else-if="Array.isArray(inputValues[inputId])">
@@ -792,6 +838,7 @@ const removeInputField = (inputId: string, index: number) => {
                 </div>
               </template>
 
+
               <!-- Literal input (no enum) -->
               <template v-else-if="!input.schema?.enum">
                 <q-input
@@ -805,6 +852,7 @@ const removeInputField = (inputId: string, index: number) => {
                   :error-message="validationErrors[inputId] ? 'This field is required' : ''"
                 />
               </template>
+
 
               <!-- Enum input -->
               <template v-else>
@@ -821,7 +869,9 @@ const removeInputField = (inputId: string, index: number) => {
             </div>
           </q-card>
 
+
         </div>
+
 
         <div class="q-mb-lg">
           <div class="text-h4 text-weight-bold text-primary q-mb-sm">
@@ -829,6 +879,7 @@ const removeInputField = (inputId: string, index: number) => {
           </div>
           <q-separator class="q-mt-md" />
         </div>
+
 
         <div v-for="(output, outputId) in data.outputs" :key="outputId" class="q-mb-md">
           <q-card class="q-pa-md">
@@ -862,8 +913,10 @@ const removeInputField = (inputId: string, index: number) => {
               >
               </q-select>
 
+
           </q-card>
         </div>
+
 
         <div class="q-mb-md">
           <q-card class="q-pa-md">
@@ -874,6 +927,7 @@ const removeInputField = (inputId: string, index: number) => {
                 <q-tooltip>URLs to receive status notifications</q-tooltip>
               </q-icon>
             </div>
+
 
             <div class="q-gutter-md">
               <!-- Success URI -->
@@ -897,6 +951,7 @@ const removeInputField = (inputId: string, index: number) => {
                 </q-input>
               </div>
 
+
               <!-- In Progress URI -->
               <div class="q-gutter-sm row items-center">
                 <q-badge color="orange" text-color="white">
@@ -917,6 +972,7 @@ const removeInputField = (inputId: string, index: number) => {
                   </template>
                 </q-input>
               </div>
+
 
               <!-- Failed URI -->
               <div class="q-gutter-sm row items-center">
@@ -955,11 +1011,13 @@ const removeInputField = (inputId: string, index: number) => {
         </div>
       </q-form>
 
+
       <q-dialog v-model="showDialog" persistent>
         <q-card style="min-width: 70vw; max-width: 90vw;">
           <q-card-section>
             <div class="text-h6">Execute Request Confirmation</div>
           </q-card-section>
+
 
           <q-card-section class="q-pt-none">
             <q-banner dense class="bg-grey-2 text-black q-pa-sm">
@@ -977,6 +1035,7 @@ const removeInputField = (inputId: string, index: number) => {
             </pre> -->
           </q-card-section>
 
+
           <q-card-actions align="right">
             <q-btn flat label="Cancel" color="primary" v-close-popup />
             <q-btn
@@ -988,6 +1047,7 @@ const removeInputField = (inputId: string, index: number) => {
           </q-card-actions>
         </q-card>
       </q-dialog>
+
 
       <div class="q-mt-md" v-if="loading">
         <q-linear-progress
@@ -1001,6 +1061,7 @@ const removeInputField = (inputId: string, index: number) => {
           <span v-else>Status: {{ jobStatus }}</span>
         </div>
       </div>
+
 
       <div class="q-mt-lg" v-if="response">
         <h6>Execution Response</h6>
