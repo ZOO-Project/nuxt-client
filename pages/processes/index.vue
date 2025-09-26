@@ -255,30 +255,35 @@ const onClearSearch = async () => {
       <div class="col-12 q-pa-md" style="max-width: 1080px;">
         <p class="text-h4 q-mb-md text-weight-bold">{{t('Processes List')}}</p>
 
-        <!-- ✅ Help Button -->
-        <q-btn
-          flat
-          icon="help_outline"
-          color="primary"
-          :label="t('Help')"
-          @click="helpVisible = true"
-          class="q-mb-md"
-        />
+        <!-- ✅ Buttons Row -->
+        <div class="row items-center q-mb-md">
+          <!-- Help Button -->
+          <q-btn
+            flat
+            icon="help_outline"
+            color="primary"
+            :label="t('Help')"
+            @click="helpVisible = true"
+          />
+
+          <q-space />
+
+          <!-- Add Process Button -->
+          <q-btn
+            v-if="isConformToCwl === true"
+            color="primary"
+            icon="add"
+            :label="t('Add Process')"
+            @click="openDialog"
+            :loading="isCheckingConformance"
+          />
+        </div>
 
         <!-- ✅ Help Dialog -->
         <HelpDialog
           v-model="helpVisible"
           title="Processes List Help"
           :help-content="helpContent"
-        />
-
-        <q-btn
-          v-if="isConformToCwl === true"
-          color="primary"
-          icon="add"
-          :label="t('Add Process')"
-          @click="openDialog"
-          :loading="isCheckingConformance"
         />
         <q-separator />
 
