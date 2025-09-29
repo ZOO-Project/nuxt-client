@@ -41,9 +41,9 @@ const helpContent = processIdHelp
 
 
 const subscriberValues = ref({
-  successUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=success',
-  inProgressUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=inProgress',
-  failedUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=failed'
+  successUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=success`,
+  inProgressUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=inProgress`,
+  failedUri: `${config.public.SUBSCRIBERURL}jobid=JOBSOCKET-${channelId.value}&type=failed`
 })
 
 
@@ -443,7 +443,14 @@ const submitProcess = async () => {
           const msgId = msg.id ?? null;
 
           if (msgJobId !== "JOBSOCKET-" + channelId.value && msgId !== jobId.value) {
-            console.log("Ignored WS message, not for this job:", msgJobId, msgId);
+            if(event.data!="1"){
+              progressPercent.value = 100;
+              progressMessage.value = "Completed successfully";
+              response.value = JSON.parse(event.data);
+              loading.value = false;
+              ws?.close();
+            }else
+              console.log("Ignored WS message, not for this job:", msgJobId, msgId);
             return;
           }
 
@@ -470,13 +477,6 @@ const submitProcess = async () => {
           }
         } catch (e) {
           console.error(" Invalid WS message:", event.data, e);
-          if(event.data!="1"){
-            progressPercent.value = 100;
-            progressMessage.value = "Completed successfully";
-            response.value = JSON.parse(event.data);
-            loading.value = false;
-            ws?.close();
-          }
         }
       };
 
