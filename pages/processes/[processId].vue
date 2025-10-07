@@ -41,9 +41,9 @@ const helpContent = processIdHelp
 
 
 const subscriberValues = ref({
-  successUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=success',
-  inProgressUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=inProgress',
-  failedUri: 'http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-' + channelId.value + '&type=failed'
+  successUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=success`,
+  inProgressUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=inProgress`,
+  failedUri: `${config.public.SUBSCRIBERURL}jobid=JOBSOCKET-${channelId.value}&type=failed`
 })
 
 
@@ -110,7 +110,7 @@ const fetchData = async () => {
 
     if (data.value && data.value.inputs) {
       for (const [key, input] of Object.entries(data.value.inputs)) {
-        if (input.minOccurs === undefined && input.maxOccurs === undefined) {
+        if (input.minOccurs !== 0) {
           requiredInputs.value.push(key)
         }
 
@@ -214,17 +214,14 @@ const fetchData = async () => {
 onMounted(() => {
   fetchData()
 })
-  
 
 const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
   const result: Record<string, any> = {}
   
-
   for (const [key, outputArray] of Object.entries(outputs)) {
     if (outputArray && outputArray.length > 0) {
       const outputConfig: any = {}
       
-
       // Parcourir chaque élément du tableau
       outputArray.forEach(item => {
         if (item.id === 'transmission') {
@@ -236,7 +233,6 @@ const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
         }
       })
       
-
       result[key] = outputConfig
     }
   }
@@ -249,26 +245,30 @@ watch([inputValues, outputValues, subscriberValues], ([newInputs, newOutputs, ne
   const formattedInputs: Record<string, any> = {}
 
   for (const [key, val] of Object.entries(newInputs)) {
+    if (
+      val === undefined ||
+      val === '' ||
+      (Array.isArray(val) && val.every(v => !v || (typeof v === 'object' && !v.value && !v.href))) ||
+      (typeof val === 'object' && 'mode' in val && !val.value && !val.href)
+    ) {
+      continue
+    }
     // If multiple inputs (array)
     if (Array.isArray(val)) {
-      // If it's a literal string/number array → just return plain values
       if (val.every(v => typeof v === "string" || typeof v === "number")) {
         formattedInputs[key] = val
       } else {
-        // Complex array case (with mode/value/format)
-        formattedInputs[key] = val.map((v: any) => {
-          if (v && typeof v === "object" && "mode" in v) {
-            if (v.mode === "href") return { href: v.href }
-            return { value: v.value, format: { mediaType: v.format } }
-          }
-          return v
-        })
+        formattedInputs[key] = val
+          .filter(v => v.value || v.href) // only keep filled
+          .map(v => v.mode === "href" ? { href: v.href } : { value: v.value, format: { mediaType: v.format } })
       }
     }
     else if (val && typeof val === 'object' && 'mode' in val) {
-      formattedInputs[key] = val.mode === 'href'
-        ? { href: val.href }
-        : { value: val.value, format: { mediaType: val.format?.mediaType ?? val.format } }
+      if (val.mode === 'href' && val.href) {
+        formattedInputs[key] = { href: val.href }
+      } else if (val.mode === 'value' && val.value) {
+        formattedInputs[key] = { value: val.value, format: { mediaType: val.format?.mediaType ?? val.format } }
+      }
     } else {
       formattedInputs[key] = val
     }
@@ -346,12 +346,25 @@ function setInputRef(id: string, el: HTMLElement | null) {
 
 function validateAndSubmit() {
   validationErrors.value = {}
-
   let firstInvalid: string | null = null
 
   for (const key of requiredInputs.value) {
     const value = inputValues.value[key]
-    const isEmpty = Array.isArray(value) ? value.length === 0 : !value
+    let isEmpty = false
+
+    if (Array.isArray(value)) {
+      if (value.every(v => typeof v === 'object'
+        ? (!v.value && !v.href)
+        : !v)) {
+        isEmpty = true
+      }
+    } else if (value && typeof value === 'object' && 'mode' in value) {
+      if (!value.value && !value.href) {
+        isEmpty = true
+      }
+    } else if (!value) {
+      isEmpty = true
+    }
 
     if (isEmpty) {
       validationErrors.value[key] = true
@@ -360,6 +373,12 @@ function validateAndSubmit() {
   }
 
   if (firstInvalid) {
+    // show notification here
+    $q.notify({
+      type: "negative",
+      message: "Please fill all required inputs before submitting."
+    })
+
     const el = inputRefs.value[firstInvalid]
     if (el?.scrollIntoView) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -394,9 +413,9 @@ const submitProcess = async () => {
 
   // subscriber URLs for async only
   const subscribers = {
-    successUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${jobId}&type=success`,
-    inProgressUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${jobId}&type=inProgress`,
-    failedUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${jobId}&type=failed`,
+    successUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${channelId.value}&type=success`,
+    inProgressUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${channelId.value}&type=inProgress`,
+    failedUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${channelId.value}&type=failed`,
   };
 
   try {
@@ -416,7 +435,7 @@ const submitProcess = async () => {
         headers: {
           Authorization: `Bearer ${authStore.token.access_token}`,
           "Content-Type": "application/json",
-          Prefer: `${preferMode.value};return=representation`,
+          Prefer: preferMode.value+(preferMode.value=="respond-async"?";return=representation":""),
         },
         body: JSON.stringify(originalPayload),
       }
@@ -447,7 +466,14 @@ const submitProcess = async () => {
           const msgId = msg.id ?? null;
 
           if (msgJobId !== "JOBSOCKET-" + channelId.value && msgId !== jobId.value) {
-            console.log("Ignored WS message, not for this job:", msgJobId, msgId);
+            if(event.data!="1"){
+              progressPercent.value = 100;
+              progressMessage.value = "Completed successfully";
+              response.value = JSON.parse(event.data);
+              loading.value = false;
+              ws?.close();
+            }else
+              console.log("Ignored WS message, not for this job:", msgJobId, msgId);
             return;
           }
 
@@ -566,8 +592,6 @@ const removeInputField = (inputId: string, index: number) => {
 }
 </script>
 
-
-
 <template>
   <div>
     <q-btn
@@ -651,6 +675,8 @@ const removeInputField = (inputId: string, index: number) => {
                         label="Reference URL (href)"
                         filled
                         dense
+                        :error="validationErrors[inputId]"
+                        :error-message="validationErrors[inputId] ? 'This field is required' : ''"
                       />
                     </template>
 
@@ -669,6 +695,8 @@ const removeInputField = (inputId: string, index: number) => {
                         autogrow
                         filled
                         dense
+                        :error="validationErrors[inputId]"
+                        :error-message="validationErrors[inputId] ? 'This field is required' : ''"
                       />
                     </div>
 
@@ -741,6 +769,8 @@ const removeInputField = (inputId: string, index: number) => {
                       autogrow
                       filled
                       dense
+                      :error="validationErrors[inputId]"
+                      :error-message="validationErrors[inputId] ? 'This field is required' : ''"
                     />
                   </div>
                 </template>
@@ -782,6 +812,8 @@ const removeInputField = (inputId: string, index: number) => {
                     :label="`${input.title || inputId} ${idx + 1}`"
                     dense
                     style="flex: 1"
+                    :error="validationErrors[inputId]"
+                    :error-message="validationErrors[inputId] ? 'This field is required' : ''"
                   />
                   <q-btn
                     icon="delete"
