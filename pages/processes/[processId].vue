@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, reactive } from 'vue'
+import { ref, onMounted, watch, reactive, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRuntimeConfig } from '#imports'
 import { triggerRef } from 'vue'
@@ -37,7 +37,33 @@ const $q = useQuasar()
 let ws: WebSocket | null = null
 const helpVisible = ref(false)
 const helpContent = processIdHelp
-    
+const bboxDialogVisible = ref(false)
+const editingBboxKey = ref<string | null>(null)
+let map: L.Map | null = null
+let drawLayer: L.LayerGroup | null = null
+let drawnFeature: L.Layer | null = null
+
+
+// Helper to extract a default bbox from various schema styles (old & new)
+const getDefaultBbox = (schema: any) => {
+  //  Try the new schema style: ogc-bbox with allOf references
+  if (schema?.schema?.allOf?.some((s: any) => s.format === 'ogc-bbox')) {
+    const bbox = schema?.example?.bbox || schema?.schema?.example?.bbox
+    if (Array.isArray(bbox)) return bbox.slice(0, 4)
+  }
+
+  //  Try the old schema style: bbox.yaml references or bbox property
+  if (schema?.example?.bbox && Array.isArray(schema.example.bbox)) {
+    return schema.example.bbox.slice(0, 4)
+  }
+
+  if (schema?.properties?.bbox?.default && Array.isArray(schema.properties.bbox.default)) {
+    return schema.properties.bbox.default.slice(0, 4)
+  }
+
+  // fallback
+  return [0, 0, 0, 0]
+}
 
 
 const subscriberValues = ref({
@@ -160,17 +186,53 @@ const fetchData = async () => {
           continue
         }
 
-        // Bounding Box input
-        if (
-          input.schema?.type === 'object' &&
-          input.schema?.properties?.bbox &&
-          input.schema?.properties?.crs
-        ) {
+        // Bounding Box input — support old schema + new allOf/ogc-bbox/bbox.yaml variants
+        const detectBboxFromSchema = (schema: any) => {
+          if (!schema) return null;
+
+          // --- Old-style bbox detection ---
+          if (schema.type === 'object' && schema.properties) {
+            const props = schema.properties || {};
+            for (const key of Object.keys(props)) {
+              const p = props[key];
+              if (
+                (p?.type === 'array' || p?.items) &&
+                (props.crs && props.crs.type === 'string')
+              ) {
+                return { propName: key, crsDefault: props.crs.default ?? 'EPSG:4326' };
+              }
+            }
+          }
+
+          // --- New-style allOf detection ---
+          if (Array.isArray(schema.allOf)) {
+            for (const s of schema.allOf) {
+              // ogc-bbox format
+              if (s?.format === 'ogc-bbox') {
+                return { propName: 'bbox', crsDefault: 'EPSG:4326' };
+              }
+              // bbox.yaml reference
+              if (typeof s?.['$ref'] === 'string' && /bbox\.yaml$/i.test(s['$ref'])) {
+                return { propName: 'bbox', crsDefault: 'EPSG:4326' };
+              }
+              // nested object schema
+              const nested = detectBboxFromSchema(s);
+              if (nested) return nested;
+            }
+          }
+
+          return null;
+        };
+
+        const bboxInfo = detectBboxFromSchema(input.schema);
+        if (bboxInfo) {
+          const defaultBbox = getDefaultBbox(input);
           inputValues.value[key] = reactive({
-            bbox: [0, 0, 0, 0],
-            crs: 'EPSG:4326'
-          })
-          continue
+            bbox: defaultBbox,
+            crs: bboxInfo.crsDefault || 'EPSG:4326',
+            _schemaPropName: bboxInfo.propName
+          });
+          continue;
         }
 
         // Multiple literal inputs (array but not complex)
@@ -211,8 +273,17 @@ const fetchData = async () => {
   }
 }
 
-onMounted(() => {
-  fetchData()
+let L: any = null
+
+onMounted(async () => {
+  if (process.client) {
+    // ✅ Import only on the client
+    const leaflet = await import('leaflet')
+    await import('@geoman-io/leaflet-geoman-free')
+    await import('@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css')
+    L = leaflet.default
+    await fetchData()
+  }
 })
 
 const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
@@ -409,7 +480,10 @@ const submitProcess = async () => {
   progressPercent.value = 0;
   progressMessage.value = "Submitting job...";
 
-  const wsUrl = `ws://${window.location.hostname}:8888/`;
+    let wsUrl = "";
+    if (typeof window !== "undefined") {
+      wsUrl = `ws://${window.location.hostname}:8888/`;
+    } 
 
   // subscriber URLs for async only
   const subscribers = {
@@ -546,11 +620,33 @@ const isMultipleInput = (input: any) => {
   return input.maxOccurs && input.maxOccurs > 1
 }
 
-const isBoundingBoxInput = (input: any) => {
-  return input.schema?.type === 'object' &&
-         input.schema?.properties?.bbox?.type === 'array' &&
-         input.schema?.properties?.crs?.type === 'string';
-}
+const isBoundingBoxInput = (input: any): boolean => {
+  if (!input?.schema) return false;
+  const schema = input.schema;
+
+  // Old-style
+  if (schema.type === 'object' && schema.properties) {
+    for (const [key, prop] of Object.entries(schema.properties)) {
+      if (
+        (prop as any)?.type === 'array' ||
+        (prop as any)?.items
+      ) {
+        if (schema.properties?.crs?.type === 'string') return true;
+      }
+    }
+  }
+
+  // New-style (allOf with ogc-bbox or bbox.yaml)
+  if (Array.isArray(schema.allOf)) {
+    return schema.allOf.some(s =>
+      s?.format === 'ogc-bbox' ||
+      (typeof s?.['$ref'] === 'string' && /bbox\.yaml$/i.test(s['$ref'])) ||
+      (s?.type === 'object' && isBoundingBoxInput({ schema: s }))
+    );
+  }
+
+  return false;
+};
 
 const isComplexInput = (input: any) => {
   return (
@@ -589,6 +685,93 @@ const removeInputField = (inputId: string, index: number) => {
     inputValues.value[inputId].splice(index, 1)
     triggerRef(inputValues)
   }
+}
+
+//  Open map popup for editing bounding box
+const openBboxPopup = (inputKey: string) => {
+  editingBboxKey.value = inputKey
+  bboxDialogVisible.value = true
+  nextTick(() => initMap())
+}
+
+const initMap = () => {
+  if (!process.client || !L) return
+  const mapContainer = document.getElementById('bbox-map')
+  if (!mapContainer) return
+
+  if (map) {
+    map.off()
+    map.remove()
+    map = null
+  }
+
+  //  Initialize map
+  map = L.map('bbox-map').setView([25.2, 55.3], 4) // default center (adjust as needed)
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map)
+
+  //  Add Geoman controls
+  map.pm.addControls({
+    position: 'topleft',
+    drawCircle: false,
+    drawMarker: false,
+    drawPolygon: false,
+    drawPolyline: false,
+    drawCircleMarker: false,
+    drawText: false,
+    drawRectangle: true,
+    editMode: true,
+    dragMode: false,
+    cutPolygon: false,
+    removalMode: true
+  })
+
+  // Layer to hold drawings
+  drawLayer = L.layerGroup().addTo(map)
+
+  //  Handle rectangle draw event
+  map.on('pm:create', e => {
+    if (drawnFeature) drawLayer?.removeLayer(drawnFeature)
+    drawnFeature = e.layer
+    drawLayer?.addLayer(drawnFeature)
+    updateBboxFromLayer()
+  })
+  //  Handle rectangle edit and delete
+  map.on('pm:edit', e => updateBboxFromLayer())
+
+  map.on('pm:remove', () => {
+    drawnFeature = null
+    if (editingBboxKey.value)
+      inputValues.value[editingBboxKey.value].bbox = [0, 0, 0, 0]
+  })
+}
+
+const updateBboxFromLayer = () => {
+  if (!drawnFeature || !editingBboxKey.value) return
+
+  const bounds = drawnFeature.getBounds()
+  const bbox = [
+    bounds.getWest().toFixed(6),
+    bounds.getSouth().toFixed(6),
+    bounds.getEast().toFixed(6),
+    bounds.getNorth().toFixed(6)
+  ]
+
+  //  Save bbox to inputValues
+  inputValues.value[editingBboxKey.value].bbox = bbox.map(Number)
+}
+
+const closeBboxPopup = () => {
+  bboxDialogVisible.value = false
+  editingBboxKey.value = null
+}
+
+const confirmBboxSelection = () => {
+  if (editingBboxKey.value && inputValues.value[editingBboxKey.value]?.bbox) {
+    console.log('Confirmed bbox:', inputValues.value[editingBboxKey.value].bbox)
+  }
+  closeBboxPopup()
 }
 </script>
 
@@ -640,7 +823,6 @@ const removeInputField = (inputId: string, index: number) => {
               </div>
             </div>
 
-            <!-- <div class="text-blue text-bold q-mb-sm">{{ inputId.toUpperCase() }}</div> -->
             <div class="q-gutter-sm">
               <q-badge color="grey-3" text-color="black" class="q-mb-sm">
                 {{ typeLabel(input, inputValues[inputId]) }}
@@ -648,9 +830,12 @@ const removeInputField = (inputId: string, index: number) => {
 
               <!-- Complex Input (Multiple or Single) -->
               <template v-if="isComplexInput(input)">
-                <!-- Multiple Complex Input -->
                 <template v-if="Array.isArray(inputValues[inputId])">
-                  <div v-for="(item, idx) in inputValues[inputId]" :key="idx" class="q-gutter-sm q-mb-md">
+                  <div
+                    v-for="(item, idx) in inputValues[inputId]"
+                    :key="idx"
+                    class="q-gutter-sm q-mb-md"
+                  >
                     <q-option-group
                       v-model="item.mode"
                       :options="[
@@ -776,35 +961,55 @@ const removeInputField = (inputId: string, index: number) => {
                 </template>
               </template>
 
-              <!-- Bounding Box Input -->
+              <!--  Bounding Box Input with Leaflet Popup -->
               <template v-else-if="isBoundingBoxInput(input)">
                 <div class="q-gutter-md">
                   <div class="row q-gutter-sm">
                     <q-input
-                      v-for="(coord, idx) in ['minX', 'minY', 'maxX', 'maxY']"
+                      v-for="(coord, idx) in inputValues[inputId].bbox"
                       :key="idx"
                       v-model.number="inputValues[inputId].bbox[idx]"
-                      :label="coord"
+                      :label="['minX','minY','maxX','maxY'][idx]"
                       type="number"
                       filled
                       dense
                       style="flex: 1"
                     />
                   </div>
+
                   <q-select
                     v-model="inputValues[inputId].crs"
-                    :options="EPSG_CODES"
-                    label="EPSG Code"
+                    :options="['EPSG:4326', 'EPSG:3857']"
+                    label="CRS"
                     filled
                     dense
                     class="q-mt-sm"
                   />
+
+                  <div class="q-mt-sm">
+                    <q-btn
+                      color="primary"
+                      glossy
+                      icon="map"
+                      label="Draw Bounding Box on Map"
+                      class="q-mt-sm text-weight-medium"
+                      no-caps
+                      unelevated
+                      @click="openBboxPopup(inputId)"
+                    >
+                      <q-tooltip>Open interactive map to select bounding box</q-tooltip>
+                    </q-btn>
+                  </div>
                 </div>
               </template>
 
-              <!-- Multiple input array -->
+              <!-- Multiple Value Input -->
               <template v-else-if="Array.isArray(inputValues[inputId])">
-                <div v-for="(val, idx) in inputValues[inputId]" :key="idx" class="row items-center q-gutter-sm q-mb-sm">
+                <div
+                  v-for="(val, idx) in inputValues[inputId]"
+                  :key="idx"
+                  class="row items-center q-gutter-sm q-mb-sm"
+                >
                   <q-input
                     filled
                     v-model="inputValues[inputId][idx]"
@@ -830,7 +1035,7 @@ const removeInputField = (inputId: string, index: number) => {
                 </div>
               </template>
 
-              <!-- Literal input (no enum) -->
+              <!-- Literal Input -->
               <template v-else-if="!input.schema?.enum">
                 <q-input
                   v-model="inputValues[inputId]"
@@ -844,7 +1049,7 @@ const removeInputField = (inputId: string, index: number) => {
                 />
               </template>
 
-              <!-- Enum input -->
+              <!-- Enum Input -->
               <template v-else>
                 <q-select
                   filled
@@ -858,8 +1063,32 @@ const removeInputField = (inputId: string, index: number) => {
               </template>
             </div>
           </q-card>
-
         </div>
+
+        <!-- Map Dialog (Only one global instance outside v-for) -->
+        <q-dialog v-model="bboxDialogVisible" persistent>
+          <q-card style="width: 90vw; max-width: 1000px; height: 80vh;">
+            <!-- Header Section -->
+            <q-bar class="bg-primary text-white">
+              <q-icon name="map" size="sm" class="q-mr-sm" />
+              <div class="text-h6">Bounding Box Map</div>
+              <q-space />
+              <q-btn dense flat icon="close" v-close-popup />
+            </q-bar>
+
+            <!-- Map Section -->
+            <q-card-section class="q-pa-none" style="height: calc(100% - 100px);">
+              <div id="bbox-map" style="width:100%; height:100%;"></div>
+            </q-card-section>
+
+            <!-- Action Buttons -->
+            <q-card-actions align="right" class="bg-grey-2">
+              <q-btn flat label="Cancel" color="negative" @click="closeBboxPopup" />
+              <q-btn color="primary" glossy label="Confirm Bounding Box" @click="confirmBboxSelection" />
+            </q-card-actions>
+          </q-card>
+        </q-dialog>
+
 
         <div class="q-mb-lg">
           <div class="text-h4 text-weight-bold text-primary q-mb-sm">
@@ -1042,7 +1271,7 @@ const removeInputField = (inputId: string, index: number) => {
           rounded
         />
 
-       
+     
         <div class="row items-center justify-between q-mt-xs">
           <div class="text-caption text-primary">
             <span v-if="progressMessage">{{ progressMessage }}</span>
