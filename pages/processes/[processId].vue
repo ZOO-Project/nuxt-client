@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, reactive, nextTick } from 'vue'
+import { useHead, useRuntimeConfig } from '#imports'
+import { ref, onMounted, watch, reactive } from 'vue'
 import { useRoute } from 'vue-router'
-import { useRuntimeConfig } from '#imports'
 import { triggerRef } from 'vue'
-import { uuid } from 'vue-uuid';
+import { uuid } from 'vue-uuid'
 import { useQuasar } from 'quasar'
 import HelpDialog from '@/components/help/HelpDialog.vue'
 import processIdHelp from '@/components/help/processIdHelp.js'
@@ -126,6 +126,7 @@ const typeLabel = (input: any, valForInputId: any) => {
   return input?.schema?.type || 'literal'
 }
 
+
 const fetchData = async () => {
   try {
     data.value = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${processId}`, {
@@ -133,6 +134,8 @@ const fetchData = async () => {
         Authorization: `Bearer ${authStore.token.access_token}`
       }
     })
+
+
 
     if (data.value && data.value.inputs) {
       for (const [key, input] of Object.entries(data.value.inputs)) {
@@ -275,6 +278,7 @@ const fetchData = async () => {
 
 let L: any = null
 
+
 onMounted(async () => {
   if (process.client) {
     // ✅ Import only on the client
@@ -285,6 +289,98 @@ onMounted(async () => {
     await fetchData()
   }
 })
+
+
+watch(
+  () => data.value,
+  (val) => {
+    if (!val) return
+
+    const rawMetadata = val.metadata || []
+
+    // Extract items by role
+    const extractByRole = (role) =>
+      rawMetadata
+        .filter(md => md.role === role)
+        .map(md => md.value)
+
+    // Authors (may be multiple)
+    const authors = extractByRole("https://schema.org/author")
+      .map(a => ({
+        "@type": a["@type"] || "Person",
+        "name": a.name || a.fullName || ""
+      }))
+
+    // Contributors 
+    const contributors = extractByRole("https://schema.org/contributor")
+      .map(c => ({
+        "@type": c["@type"] || "Person",
+        "name": c.name || c.fullName || ""
+      }))
+
+    // Organizations 
+    const organizations = extractByRole("https://schema.org/organization")
+      .map(org => ({
+        "@type": "Organization",
+        "name": org.name || ""
+      }))
+
+    // Additional metadata (anything NOT author/contributor/organization)
+    const skipRoles = [
+      "https://schema.org/author",
+      "https://schema.org/contributor",
+      "https://schema.org/organization"
+    ]
+
+    const additionalProps = rawMetadata
+      .filter(md => !skipRoles.includes(md.role))
+      .map(md => ({
+        "@type": "PropertyValue",
+        "name": md.role,
+        "value": md.value
+      }))
+
+    // Build final JSON-LD
+    const jsonLd = {
+      "@context": "https://schema.org",
+      "@type": "SoftwareSourceCode",
+      "name": val.id,
+      "description": val.description,
+      "softwareVersion": val.version || null,
+      "keywords": val.keywords || [],
+      "identifier": processId,
+      "url": `http://localhost:3058/processes/${processId}`,
+
+      // New metadata mapping
+      "author": authors,
+      "contributor": contributors,
+      "provider": organizations.length ? organizations[0] : {
+        "@type": "Organization",
+        "name": "ZOO-Project"
+      },
+
+      "additionalProperty": additionalProps
+    }
+
+    // Inject JSON-LD into <head>
+    useHead({
+      script: [
+        {
+          type: "application/ld+json",
+          children: JSON.stringify(jsonLd)
+        }
+      ]
+    })
+  },
+  { immediate: true }
+)
+
+
+
+onMounted(() => {
+  fetchData()
+})
+
 
 const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
   const result: Record<string, any> = {}
@@ -1062,6 +1158,65 @@ watch(
         <div class="text-subtitle1 text-grey-7">
           {{ data.description }}
         </div>
+        <q-card-section class="q-pa-md bg-grey-1 rounded-borders q-mt-md">
+
+          <!-- Version -->
+          <div class="row q-mb-sm">
+            <div class="col-3 text-grey-7 text-weight-bold">Version</div>
+            <div class="col">
+              {{ data.version || '—' }}
+            </div>
+          </div>
+
+          <!-- Keywords -->
+          <div class="row q-mb-sm">
+            <div class="col-3 text-grey-7 text-weight-bold">Keywords</div>
+            <div class="col">
+              <span v-if="data.keywords?.length">
+                {{ data.keywords.join(', ') }}
+              </span>
+              <span v-else>—</span>
+            </div>
+          </div>
+
+          <!-- Metadata -->
+          <div class="row q-mb-sm">
+            <div class="col-12 text-grey-7 text-weight-bold q-mb-xs">Additional Metadata</div>
+
+            <div v-if="data.metadata?.length" class="col-12">
+
+              <div v-for="(md, index) in data.metadata" :key="index" class="q-pa-sm bg-white rounded-borders q-mb-sm shadow-1">
+
+                <!-- Detect Person -->
+                <div v-if="md.value && typeof md.value === 'object' && md.value['@type'] === 'Person'">
+                  <div class="text-weight-bold text-primary">👤 {{ md.title || 'Person' }}</div>
+                  <div class="q-mt-xs">
+                    <div><strong>Name:</strong> {{ md.value.name }}</div>
+                    <div v-if="md.value.role"><strong>Role:</strong> {{ md.value.role }}</div>
+                    <div v-if="md.value.email"><strong>Email:</strong> {{ md.value.email }}</div>
+                    <div v-if="md.value.affiliation"><strong>Affiliation:</strong> {{ md.value.affiliation }}</div>
+                  </div>
+                </div>
+
+                <!-- Default metadata -->
+                <div v-else>
+                  <div class="text-weight-bold">{{ md.title || md.role }}</div>
+                  <div class="text-grey-8">{{ md.value }}</div>
+                </div>
+
+              </div>
+
+              </div>
+
+
+            <div v-else class="col-12">
+              —
+            </div>
+          </div>
+
+        </q-card-section>
+
+
         <q-separator class="q-mt-md" />
       </div>
 
