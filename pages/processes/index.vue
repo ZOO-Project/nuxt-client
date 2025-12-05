@@ -418,13 +418,25 @@ const onClearSearch = async () => {
   <q-page class="q-pa-sm">
     <div class="row justify-center">
       <div class="col-12 q-pa-md" style="max-width: 1080px;">
+<p class="text-h4 q-mb-md text-weight-bold">{{ t('Processes List') }}</p>
 
-        <p class="text-h4 q-mb-md text-weight-bold">{{ t('Processes List') }}</p>
+<!-- Buttons Row -->
+<div class="row items-center q-mb-md">
 
-        <!-- Buttons row -->
-        <div class="row items-center q-mb-md">
-          <q-btn flat icon="help_outline" color="primary" :label="t('Help')" @click="helpVisible = true" />
-          <q-space />
+  <!-- Help Button -->
+  <q-btn
+    flat
+    icon="help_outline"
+    color="primary"
+    :label="t('Help')"
+    @click="helpVisible = true"
+  />
+
+  <q-space />
+
+  <!-- Add Process Button -->
+</div>
+
           <q-btn
             v-if="isConformToCwl === true"
             color="primary"
@@ -432,12 +444,18 @@ const onClearSearch = async () => {
             :label="t('Add Process')"
             @click="openDialog"
             :loading="isCheckingConformance"
-            id="file-input-button"
           />
         </div>
 
-        <HelpDialog v-model="helpVisible" title="Processes List Help" :help-content="helpContent" />
+        <!-- Help Dialog -->
+        <HelpDialog
+          v-model="helpVisible"
+          title="Processes List Help"
+          :help-content="helpContent"
+        />
+
         <q-separator />
+
 
         <div class="q-mb-md">
           <q-input
