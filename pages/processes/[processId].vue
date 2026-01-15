@@ -218,18 +218,41 @@ const fetchData = async () => {
           requiredInputs.value.push(key)
         }
 
-       if (input.minOccurs === 0) {
+        if (input.minOccurs === 0) {
           enabledInputs[key] = false;
         } else {
           enabledInputs[key] = true;
         }
- 
+
+        if (
+          input.schema?.type === 'array' &&
+          !hasContentMedia(input.schema)
+        ) {
+          const defaults = input.schema?.default ?? [];
+
+          inputValues.value[key] = Array.isArray(defaults) && defaults.length
+            ? defaults.map(v => ({
+                mode: 'value',
+                value: String(v),
+                href: ''
+              }))
+            : [
+                {
+                  mode: 'value',
+                  value: '',
+                  href: ''
+                }
+              ];
+
+          continue;
+        }
+
         // COMPLEX input (single or oneOf/contentMediaType)
         if (hasContentMedia(input.schema)) {
           const supportedFormats = getSupportedFormats(input.schema)
           const hrefOptions = input?.example?.hrefOptions || []
- 
-          if (input.maxOccurs && input.maxOccurs > 1) {
+
+          if (isMultiValueInput(input)) { 
             // multiple allowed → array
             inputValues.value[key] = [
               {
@@ -273,8 +296,7 @@ const fetchData = async () => {
         // Bounding Box input — support old schema + new allOf/ogc-bbox/bbox.yaml variants
         const detectBboxFromSchema = (schema: any) => {
           if (!schema) return null;
- 
-          // --- Old-style bbox detection ---
+
           if (schema.type === 'object' && schema.properties) {
             const props = schema.properties || {};
             for (const key of Object.keys(props)) {
@@ -287,19 +309,15 @@ const fetchData = async () => {
               }
             }
           }
- 
-          // --- New-style allOf detection ---
+
           if (Array.isArray(schema.allOf)) {
             for (const s of schema.allOf) {
-              // ogc-bbox format
               if (s?.format === 'ogc-bbox') {
                 return { propName: 'bbox', crsDefault: 'EPSG:4326' };
               }
-              // bbox.yaml reference
               if (typeof s?.['$ref'] === 'string' && /bbox\.yaml$/i.test(s['$ref'])) {
                 return { propName: 'bbox', crsDefault: 'EPSG:4326' };
               }
-              // nested object schema
               const nested = detectBboxFromSchema(s);
               if (nested) return nested;
             }
@@ -318,13 +336,8 @@ const fetchData = async () => {
           });
           continue;
         }
- 
-        // Multiple literal inputs (array but not complex)
-        if (input.schema?.type === 'array') {
-          inputValues.value[key] = ['']
-          continue
-        }
- 
+
+
         // Default init for literal input
         inputValues.value[key] = input.schema?.default ?? (input.schema?.type === 'number' ? 0 : '')
       }
@@ -532,6 +545,20 @@ watch(
         bbox: val.bbox,
         crs: toUrn(val.crs || 'EPSG:4326')
       }
+        continue
+      }
+
+      if (
+        Array.isArray(val) &&
+        val.length &&
+        typeof val[0] === 'object' &&
+        'value' in val &&
+        data.value.inputs[key]?.schema?.type === 'array' &&
+        !hasContentMedia(data.value.inputs[key]?.schema)
+      ) {
+        formattedInputs[key] = val
+          .filter(v => v.value !== undefined && v.value !== '')
+          .map(v => v.value)
         continue
       }
  
@@ -842,7 +869,7 @@ const submitProcess = async () => {
  
  
 const isMultipleInput = (input: any) => {
-  return input.maxOccurs && input.maxOccurs > 1
+  return isMultiValueInput(input)
 }
  
 const isBoundingBoxInput = (input: any): boolean => {
@@ -883,26 +910,63 @@ const isComplexInput = (input: any) => {
     )
   )
 }
- 
+
+const isMultiValueInput = (input: any): boolean => {
+  // New OGC API – Processes schema
+  if (input?.schema?.type === 'array') {
+    return true
+  }
+
+  // Old EOEPCA / CWL schemas
+  if (input?.['extended-schema']?.type === 'array') {
+    return true
+  }
+
+  if (typeof input?.maxOccurs === 'number' && input.maxOccurs > 1) {
+    return true
+  }
+
+  const cwlType = input?.metadata?.find(
+    (m: any) => m.title === 'cwl:type'
+  )?.value
+
+  if (typeof cwlType === 'string' && cwlType.includes('[]')) {
+    return true
+  }
+
+  return false
+}
+
 const DEFAULT_SUPPORTED_FORMATS = ['application/json', 'text/plain']
  
 const addInputField = (inputId: string) => {
- 
+  const input = data.value.inputs[inputId];
+
   if (!Array.isArray(inputValues.value[inputId])) {
-    inputValues.value[inputId] = []
+    inputValues.value[inputId] = [];
   }
- 
-  const currentFormats = inputValues.value[inputId][0]?.availableFormats || DEFAULT_SUPPORTED_FORMATS
- 
+
+  if (input.schema?.type === 'array' && !isComplexInput(input)) {
+    inputValues.value[inputId].push({
+      mode: 'value',
+      value: '',
+      href: ''
+    });
+    triggerRef(inputValues);
+    return;
+  }
+
+  const currentFormats = inputValues.value[inputId][0]?.availableFormats || DEFAULT_SUPPORTED_FORMATS;
+
   inputValues.value[inputId].push({
     mode: 'value',
     value: '',
     href: '',
     format: currentFormats[0],
     availableFormats: currentFormats
-  })
- 
-  triggerRef(inputValues)
+  });
+
+  triggerRef(inputValues);
 }
  
 const removeInputField = (inputId: string, index: number) => {
@@ -1779,7 +1843,7 @@ function getFormatAndRef(input) {
  
                   <!-- Add button -->
                   <q-btn
-                    v-if="isMultipleInput(input)"
+                    v-if="isMultiValueInput(input)"
                     flat
                     icon="add"
                     label="Add Another"
@@ -1905,7 +1969,7 @@ function getFormatAndRef(input) {
               </template>
  
               <!-- Multiple Value Input -->
-              <template v-else-if="Array.isArray(inputValues[inputId])">
+              <template v-else-if="isMultiValueInput(input) && Array.isArray(inputValues[inputId]) && !isComplexInput(input)">
                 <div
                   v-for="(val, idx) in inputValues[inputId]"
                   :key="idx"
@@ -1913,8 +1977,8 @@ function getFormatAndRef(input) {
                 >
                   <q-input
                     filled
-                    v-model="inputValues[inputId][idx]"
-                    :type="input.schema?.type === 'number' ? 'number' : 'text'"
+                    v-model="inputValues[inputId][idx].value"
+                    :type="input.schema?.items?.type === 'number' ? 'number' : 'text'"
                     :label="`${input.title || inputId} ${idx + 1}`"
                     dense
                     style="flex: 1"
@@ -1934,6 +1998,17 @@ function getFormatAndRef(input) {
                     <q-tooltip>Remove</q-tooltip>
                   </q-btn>
                 </div>
+
+                <!-- ✅ THIS WAS MISSING -->
+                <q-btn
+                  v-if="isMultiValueInput(input)"
+                  flat
+                  icon="add"
+                  label="Add Another"
+                  size="sm"
+                  class="q-mt-sm"
+                  @click="addInputField(inputId)"
+                />
               </template>
  
               <!-- Literal Input -->
