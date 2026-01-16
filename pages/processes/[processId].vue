@@ -87,6 +87,35 @@ const hasContentMedia = (schema: any) =>
     (Array.isArray(schema?.oneOf) && schema.oneOf.some((f: any) => !!f?.contentMediaType))
   )
  
+
+const getArrayItemType = (schema: any): string => {
+  if (!schema || schema.type !== 'array') return ''
+
+  const items = schema.items
+
+  // Literal arrays
+  if (items?.type) {
+    return items.type
+  }
+
+  // Complex arrays
+  if (
+    items?.contentMediaType ||
+    items?.mediaType ||
+    (Array.isArray(items?.oneOf) && items.oneOf.some((o: any) => o?.contentMediaType))
+  ) {
+    return 'complex'
+  }
+
+  return 'unknown'
+}
+
+const isLiteralArraySchema = (schema: any): boolean => {
+  if (schema?.type !== 'array') return false
+  const t = getArrayItemType(schema)
+  return ['string', 'number', 'integer', 'boolean'].includes(t)
+}
+
 // Collect supported formats (oneOf contentMediaType or contentMediaType field). Ensure application/json is present.
 const getSupportedFormats = (schema: any): string[] => {
   const list: string[] = []
@@ -129,7 +158,11 @@ const typeLabel = (input: any, valForInputId: any) => {
     }
     return 'complex'
   }
-  return input?.schema?.type || 'literal'
+    if (input?.schema?.type === 'array') {
+      const itemType = getArrayItemType(input.schema)
+      return `array(${itemType})`
+    }
+    return input?.schema?.type || 'literal'
 }
  
 const normalizeBboxSchema = (schema: any) => {
@@ -550,14 +583,11 @@ watch(
 
       if (
         Array.isArray(val) &&
-        val.length &&
-        typeof val[0] === 'object' &&
-        'value' in val &&
-        data.value.inputs[key]?.schema?.type === 'array' &&
-        !hasContentMedia(data.value.inputs[key]?.schema)
+        data.value.inputs[key]?.schema &&
+        isLiteralArraySchema(data.value.inputs[key].schema)
       ) {
         formattedInputs[key] = val
-          .filter(v => v.value !== undefined && v.value !== '')
+          .filter(v => v?.value !== undefined && v?.value !== '')
           .map(v => v.value)
         continue
       }
@@ -1764,7 +1794,7 @@ function getFormatAndRef(input) {
                 </template>
 
                 <template v-else>
-                  {{ input.schema?.type || '—' }}
+                  {{ typeLabel(input) }}
                 </template>
               </span>
             </q-badge>
@@ -2293,7 +2323,7 @@ function getFormatAndRef(input) {
           </div>
         </div>
       </div>
- 
+
       <div class="q-mt-lg" v-if="response">
         <h6>Execution Response</h6>
         <details>
