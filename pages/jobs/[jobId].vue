@@ -85,9 +85,6 @@
       <div v-if="modalContent">
         <pre class="pre-content">{{ modalContent }}</pre>
       </div>
-      <div v-else class="text-negative">
-        {{ t('No data or failed to fetch') }}
-      </div>
     </AppDialog>
   </q-page>
 </template>
