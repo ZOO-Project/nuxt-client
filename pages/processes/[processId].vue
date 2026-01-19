@@ -1603,9 +1603,6 @@ function getFormatAndRef(input) {
         v-if="helpContent"
         v-html="helpContent"
       />
-      <div v-else class="text-negative">
-        {{ t('No data or failed to fetch') }}
-      </div>
     </HelpDialog>
   <q-page class="q-pa-md">
     <div v-if="data">
