@@ -170,8 +170,15 @@ const visualizeCwl = async (row: any) => {
         'Accept-Language': locale.value
       }
     })
-    if (!res.ok) throw new Error(`Failed to fetch package (${res.status})`)
-    
+    if (!res.ok) {
+      Notify.create({
+        type: 'warning',
+        message: t(
+          'CWL package cannot be accessed'
+        )
+      })
+      return
+    }
 
     const response = await fetch('/cwl-demo/example-workflow.cwl')
     const yamlText = await res.text()
@@ -195,14 +202,17 @@ const iconMap: Record<string, string> = {
   organization: "business",
   license: "description",
   keywords: "tag",
+  address: 'place',
   codeRepository: "cloud_upload",
 };
 
-// Convert URL - softwareVersion
+
+const SCHEMA_INTERNAL_KEYS = ['class', '@context', '@type'];
+
 const extractMetaType = (role: string) => {
   if (!role) return '';
   return role.split("/").pop(); 
-};
+}; 
 
 const isUrl = (value) => {
   if (typeof value !== "string") return false;
@@ -213,6 +223,27 @@ const openSchema = (url) => {
   window.open(url, "_blank");
 };
 
+const getEntityType = (value: any) => {
+  return value?.['@type'] || null;
+};
+
+const getEntitySchemaUrl = (value: any) => {
+  return value?.['@type']
+    ? `https://schema.org/${value['@type']}`
+    : null;
+};
+
+const getRenderableFields = (value: any) => {
+  if (!value || typeof value !== 'object') return []
+  return Object.entries(value).filter(
+    ([key]) => !SCHEMA_INTERNAL_KEYS.includes(key)
+  )
+}
+
+const prettyAddressKey = (key: string) => {
+  if (key === 's:addressCountry' || key === 'addressCountry') return 'Country'
+  return key
+}
 
 
 const onRowClick = async (evt, row, index) => {
@@ -472,6 +503,32 @@ const columns = [
   }
 ]
 
+const getInputType = (input: any) => {
+  const schema =
+    input?.['original-schema'] ||   
+    input?.schema ||
+    input
+
+  // Handle allOf
+  if (schema?.allOf && Array.isArray(schema.allOf)) {
+    const refObj = schema.allOf.find((s: any) => s.$ref)
+    const formatObj = schema.allOf.find((s: any) => s.format)
+
+    if (formatObj?.format && refObj?.$ref) {
+      return {
+        label: formatObj.format,
+        link: refObj.$ref
+      }
+    }
+  }
+
+  if (schema?.type) {
+    return { label: schema.type }
+  }
+
+  return { label: 'object' }
+}
+
 const rows = computed(() => {
   if (!data.value?.processes) return []
   const term = filter.value.toLowerCase()
@@ -531,9 +588,6 @@ const onClearSearch = async () => {
             v-if="helpContent"
             v-html="helpContent"
           />
-          <div v-else class="text-negative">
-            {{ t('No data or failed to fetch') }}
-          </div>
         </HelpDialog>
         <q-separator />
 
@@ -607,13 +661,15 @@ const onClearSearch = async () => {
                     </div>
 
 
-                    <p><b>{{ t('Keywords') }}</b>
-                      <span v-if="selectedProcess?.keywords?.length">
-                        {{ selectedProcess.keywords.join(', ') }}
-                      </span>
-                      <span v-else>—</span>
-                    </p>
-
+                    <div class="row q-mb-sm items-center">
+                      <div class="text-weight-bold">{{ t('Keywords') }}</div>
+                      <div class="q-ml-sm">
+                        <span v-if="selectedProcess?.keywords?.length">
+                          {{ selectedProcess.keywords.join(', ') }}
+                        </span>
+                        <span v-else>—</span>
+                      </div>
+                    </div>
 
                     <q-separator class="q-my-sm" />
 
@@ -632,7 +688,21 @@ const onClearSearch = async () => {
                       <tbody>
                         <tr v-for="([key, val]) in Object.entries(selectedProcess?.inputs || {})" :key="key">
                           <td>{{ key }}</td>
-                          <td>{{ val?.schema?.type || val?.type || 'unknown' }}</td>
+                          <td>
+                            <template v-if="getInputType(val).link">
+                              <a
+                                :href="getInputType(val).link"
+                                target="_blank"
+                                class="text-primary"
+                              >
+                                {{ getInputType(val).label }}
+                              </a>
+                            </template>
+
+                            <template v-else>
+                              {{ getInputType(val).label }}
+                            </template>
+                          </td>
                           <td>{{ val?.description || '—' }}</td>
                         </tr>
 
@@ -660,7 +730,21 @@ const onClearSearch = async () => {
                       <tbody>
                         <tr v-for="([key, val]) in Object.entries(selectedProcess?.outputs || {})" :key="key">
                           <td>{{ key }}</td>
-                          <td>{{ val?.schema?.type || val?.type || 'unknown' }}</td>
+                          <td>
+                            <template v-if="getInputType(val).link">
+                              <a
+                                :href="getInputType(val).link"
+                                target="_blank"
+                                class="text-primary"
+                              >
+                                {{ getInputType(val).label }}
+                              </a>
+                            </template>
+
+                            <template v-else>
+                              {{ getInputType(val).label }}
+                            </template>
+                          </td>
                           <td>{{ val?.description || '—' }}</td>
                         </tr>
 
@@ -715,70 +799,79 @@ const onClearSearch = async () => {
                         {{ md.title }}
                       </div>
 
-                        <!--Person object -->
-                        <div
-                          v-if="md.value?.['@type'] === 'Person'"
-                          class="q-mt-xs text-grey-8"
-                        >
-                          <div><strong>Name:</strong> {{ md.value.name }}</div>
-                          <div v-if="md.value.email">
-                            <strong>Email:</strong>
-                            <a :href="'mailto:' + md.value.email" class="text-primary">{{ md.value.email }}</a>
-                          </div>
-                          <div v-if="md.value.affiliation">
-                            <strong>Affiliation:</strong> {{ md.value.affiliation }}
-                          </div>
-                        </div>
 
-                        <!-- Organization object -->
-                        <div
-                          v-else-if="md.value?.['@type'] === 'Organization'"
-                          class="q-mt-xs text-grey-8"
-                        >
-                          <div><strong>Name:</strong> {{ md.value.name }}</div>
-
-                          <div v-if="md.value.url">
-                            <strong>URL:</strong>
-                            <a :href="md.value.url" target="_blank" class="text-primary">
-                              {{ md.value.url }}
-                            </a>
-                          </div>
-
-                          <div v-if="md.value.address">
-                            <strong>Country:</strong>
-                            {{
-                              md.value.address.addressCountry ||
-                              md.value.address["s:addressCountry"] ||
-                              md.value.address.country ||
-                              '—'
-                            }}
-                          </div>
-                        </div>
-
-                        <!-- Simple string value -->
-                        <div v-else-if="typeof md.value === 'string'" class="q-mt-xs text-grey-8 long-text">
+                      <!-- Simple string value -->
+                      <div v-else-if="typeof md.value === 'string'" class="q-mt-xs text-grey-8 long-text">
+                        <template v-if="isUrl(md.value)">
+                          <a :href="md.value" target="_blank" class="text-primary">
+                            {{ md.value }}
+                          </a>
+                        </template>
+                        <template v-else>
                           {{ md.value }}
+                        </template>
+                      </div>
+
+                      <!-- Object value -->
+                      <div v-else-if="typeof md.value === 'object'" class="q-mt-xs">
+
+                        <!-- ENTITY TYPE -->
+                        <div
+                          v-if="getEntityType(md.value)"
+                          class="text-caption text-primary cursor-pointer q-mb-xs"
+                          @click="openSchema(getEntitySchemaUrl(md.value))"
+                        >
+                          {{ getEntityType(md.value) }}
                         </div>
 
-                        <!-- Nested object -->
-                        <div v-else-if="typeof md.value === 'object'" class="q-mt-xs">
+
+
+                        <!-- ENTITY FIELDS -->
                           <div
-                            v-for="(v, key) in md.value"
-                            :key="key"
+                            v-for="([key, v], i) in getRenderableFields(md.value)"
+                            :key="i"
                             class="q-mb-xs text-grey-8"
                           >
-                            <strong>{{ key }}:</strong>
-                            
-                            <!-- If URL inside nested value -->
-                            <template v-if="isUrl(v)">
-                              <a :href="v" target="_blank" class="text-primary long-text">{{ v }}</a>
-                            </template>
 
-                            <template v-else>
-                              <span class="long-text">{{ v }}</span>
-                            </template>
+                        <template v-if="key === 'address' && typeof v === 'object'">
+                          <div class="q-mt-sm">
+                            <strong>
+                              <q-icon name="place" size="14px" class="q-mr-xs text-primary" />
+                              address:
+                            </strong>
+
+                            <div class="q-ml-lg q-mt-xs">
+                              <div
+                                v-for="([addrKey, addrVal], i) in getRenderableFields(v)"
+                                :key="i"
+                                class="q-mb-xs"
+                              >
+                                <strong>{{ prettyAddressKey(addrKey) }}:</strong>
+                                <span class="q-ml-xs">{{ addrVal }}</span>
+                              </div>
+                            </div>
                           </div>
+                        </template>
+
+                          
+                        <!-- Normal fields -->
+                        <template v-else>
+                          <strong class="q-mr-xs">{{ key }}:</strong>
+
+                          <span class="long-text">
+                            <template v-if="isUrl(v)">
+                              <a :href="v" target="_blank" class="text-primary">
+                                {{ v }}
+                              </a>
+                            </template>
+                            <template v-else>
+                              {{ v }}
+                            </template>
+                          </span>
+                        </template>
                         </div>
+
+                      </div>
 
                       </div>
 

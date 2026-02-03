@@ -23,9 +23,6 @@
             v-if="helpContent"
             v-html="helpContent"
           />
-          <div v-else class="text-negative">
-            {{ t('No data or failed to fetch') }}
-          </div>
         </HelpDialog>
 
         <q-separator />
@@ -75,9 +72,6 @@
         >
           <div v-if="modalContent">
             <pre class="pre-content">{{ modalContent }}</pre>
-          </div>
-          <div v-else class="text-negative">
-            {{ t('No data or failed to fetch') }}
           </div>
         </AppDialog>
       </div>

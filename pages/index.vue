@@ -24,9 +24,6 @@
             v-if="helpContent"
             v-html="helpContent"
           />
-          <div v-else class="text-negative">
-            {{ t('No data or failed to fetch') }}
-          </div>
         </HelpDialog>
 
         <q-card v-if="apiInfo" class="q-pa-md q-mb-lg">

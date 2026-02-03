@@ -545,8 +545,11 @@ const iconMap: Record<string, string> = {
   organization: "business",
   license: "description",
   keywords: "tag",
+  address: 'place',
   codeRepository: "cloud_upload",
 };
+
+const SCHEMA_INTERNAL_KEYS = ['class', '@context', '@type'];
 
 // Convert URL - softwareVersion
 const extractMetaType = (role: string) => {
@@ -562,6 +565,28 @@ const isUrl = (value) => {
 const openSchema = (url) => {
   window.open(url, "_blank");
 };
+
+const getEntityType = (value: any) => {
+  return value?.['@type'] || null;
+};
+
+const getEntitySchemaUrl = (value: any) => {
+  return value?.['@type']
+    ? `https://schema.org/${value['@type']}`
+    : null;
+};
+
+const getRenderableFields = (value: any) => {
+  if (!value || typeof value !== 'object') return []
+  return Object.entries(value).filter(
+    ([key]) => !SCHEMA_INTERNAL_KEYS.includes(key)
+  )
+}
+
+const prettyAddressKey = (key: string) => {
+  if (key === 's:addressCountry' || key === 'addressCountry') return 'Country'
+  return key
+}
 
  
 onMounted(async () => {
@@ -1627,9 +1652,6 @@ function getFormatAndRef(input) {
         v-if="helpContent"
         v-html="helpContent"
       />
-      <div v-else class="text-negative">
-        {{ t('No data or failed to fetch') }}
-      </div>
     </HelpDialog>
   <q-page class="q-pa-md">
     <div v-if="data">
@@ -1667,7 +1689,7 @@ function getFormatAndRef(input) {
             dense
             dense-toggle
             class="rounded-borders bg-white q-mt-md shadow-1"
-          >
+            >
             <q-card-section>
 
               <div v-if="data.metadata?.length">
@@ -1703,70 +1725,78 @@ function getFormatAndRef(input) {
                   {{ md.title }}
                 </div>
 
-                  <!--Person object -->
-                  <div
-                    v-if="md.value?.['@type'] === 'Person'"
-                    class="q-mt-xs text-grey-8"
-                  >
-                    <div><strong>Name:</strong> {{ md.value.name }}</div>
-                    <div v-if="md.value.email">
-                      <strong>Email:</strong>
-                      <a :href="'mailto:' + md.value.email" class="text-primary">{{ md.value.email }}</a>
-                    </div>
-                    <div v-if="md.value.affiliation">
-                      <strong>Affiliation:</strong> {{ md.value.affiliation }}
-                    </div>
-                  </div>
+                      <!-- Simple string value -->
+                      <div v-else-if="typeof md.value === 'string'" class="q-mt-xs text-grey-8 long-text">
+                        <template v-if="isUrl(md.value)">
+                          <a :href="md.value" target="_blank" class="text-primary">
+                            {{ md.value }}
+                          </a>
+                        </template>
+                        <template v-else>
+                          {{ md.value }}
+                        </template>
+                      </div>
 
-                  <!-- Organization object -->
-                  <div
-                    v-else-if="md.value?.['@type'] === 'Organization'"
-                    class="q-mt-xs text-grey-8"
-                  >
-                    <div><strong>Name:</strong> {{ md.value.name }}</div>
+                      <!-- Object value -->
+                      <div v-else-if="typeof md.value === 'object'" class="q-mt-xs">
 
-                    <div v-if="md.value.url">
-                      <strong>URL:</strong>
-                      <a :href="md.value.url" target="_blank" class="text-primary">
-                        {{ md.value.url }}
-                      </a>
-                    </div>
+                        <!-- ENTITY TYPE -->
+                        <div
+                          v-if="getEntityType(md.value)"
+                          class="text-caption text-primary cursor-pointer q-mb-xs"
+                          @click="openSchema(getEntitySchemaUrl(md.value))"
+                        >
+                          {{ getEntityType(md.value) }}
+                        </div>
 
-                    <div v-if="md.value.address">
-                      <strong>Country:</strong>
-                      {{
-                        md.value.address.addressCountry ||
-                        md.value.address["s:addressCountry"] ||
-                        md.value.address.country ||
-                        '—'
-                      }}
-                    </div>
-                  </div>
 
-                  <!-- Simple string value -->
-                  <div v-else-if="typeof md.value === 'string'" class="q-mt-xs text-grey-8">
-                    {{ md.value }}
-                  </div>
 
-                  <!-- Nested object -->
-                  <div v-else-if="typeof md.value === 'object'" class="q-mt-xs">
-                    <div
-                      v-for="(v, key) in md.value"
-                      :key="key"
-                      class="q-mb-xs text-grey-8"
-                    >
-                      <strong>{{ key }}:</strong>
-                      
-                      <!-- If URL inside nested value -->
-                      <template v-if="isUrl(v)">
-                        <a :href="v" target="_blank" class="text-primary">{{ v }}</a>
-                      </template>
+                        <!-- ENTITY FIELDS -->
+                          <div
+                            v-for="([key, v], i) in getRenderableFields(md.value)"
+                            :key="i"
+                            class="q-mb-xs text-grey-8"
+                          >
 
-                      <template v-else>
-                        {{ v }}
-                      </template>
-                    </div>
-                  </div>
+                        <template v-if="key === 'address' && typeof v === 'object'">
+                          <div class="q-mt-sm">
+                            <strong>
+                              <q-icon name="place" size="14px" class="q-mr-xs text-primary" />
+                              address:
+                            </strong>
+
+                            <div class="q-ml-lg q-mt-xs">
+                              <div
+                                v-for="([addrKey, addrVal], i) in getRenderableFields(v)"
+                                :key="i"
+                                class="q-mb-xs"
+                              >
+                                <strong>{{ prettyAddressKey(addrKey) }}:</strong>
+                                <span class="q-ml-xs">{{ addrVal }}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </template>
+
+                          
+                        <!-- Normal fields -->
+                        <template v-else>
+                          <strong class="q-mr-xs">{{ key }}:</strong>
+
+                          <span class="long-text">
+                            <template v-if="isUrl(v)">
+                              <a :href="v" target="_blank" class="text-primary">
+                                {{ v }}
+                              </a>
+                            </template>
+                            <template v-else>
+                              {{ v }}
+                            </template>
+                          </span>
+                        </template>
+                        </div>
+
+                      </div>                 
 
                 </div>
 
@@ -2361,3 +2391,4 @@ function getFormatAndRef(input) {
   </q-page>
   </div>
 </template>
+ 
