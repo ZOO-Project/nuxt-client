@@ -566,14 +566,25 @@ const openSchema = (url) => {
   window.open(url, "_blank");
 };
 
+const normalizeType = (type: string) => {
+  if (!type) return null;
+
+  // Remove namespace prefix 
+  if (type.includes(':')) {
+    return type.split(':')[1];
+  }
+
+  return type;
+};
+
 const getEntityType = (value: any) => {
-  return value?.['@type'] || null;
+  const type = value?.['@type'];
+  return type ? normalizeType(type) : null;
 };
 
 const getEntitySchemaUrl = (value: any) => {
-  return value?.['@type']
-    ? `https://schema.org/${value['@type']}`
-    : null;
+  const type = normalizeType(value?.['@type']);
+  return type ? `https://schema.org/${type}` : null;
 };
 
 const getRenderableFields = (value: any) => {
