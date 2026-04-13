@@ -2,9 +2,9 @@ name: Run Tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ run-tests ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ run-tests ]
   release:
     types: [published]
 
@@ -19,10 +19,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-
-      - name: Remove package-lock and node_modules
-        run: rm -rf package-lock.json node_modules
+          node-version: '20'
 
       - name: Install dependencies
         run: npm install
