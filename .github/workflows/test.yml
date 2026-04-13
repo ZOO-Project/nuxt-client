@@ -2,9 +2,9 @@ name: Run Tests
 
 on:
   push:
-    branches: [ run-tests ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ run-tests ]
+    branches: [ main, develop ]
   release:
     types: [published]
 
