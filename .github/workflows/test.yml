@@ -24,5 +24,45 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Download CWL files
+        run: |
+          mkdir -p tests/fixtures
+
+          # Format: "owner/repo|folder-path|version(branch/tag)"
+          CONFIGS=(
+            "eoap/application-package-patterns|cwl-workflow|main"
+            "GeoLabs/KindGrove||v0.0.1-rc8"
+            "ZOO-Project/charts|zoo-project-dru/files/example|main"
+          )
+
+          for config in "${CONFIGS[@]}"; do
+            REPO=$(echo "$config" | cut -d'|' -f1)
+            SUB_PATH=$(echo "$config" | cut -d'|' -f2)
+            REF=$(echo "$config" | cut -d'|' -f3)
+
+            if [ -z "$SUB_PATH" ]; then
+              API_URL="https://api.github.com/repos/$REPO/contents?ref=$REF"
+            else
+              API_URL="https://api.github.com/repos/$REPO/contents/$SUB_PATH?ref=$REF"
+            fi
+
+            echo "Fetching from $API_URL"
+
+            curl -s $API_URL \
+            | jq -r '.[] | select(.name | endswith(".cwl")) | .download_url' \
+            | while read url; do
+                filename=$(basename $url)
+
+                echo "Downloading $filename from $REPO"
+
+                curl -L "$url" -o tests/fixtures/${REPO//\//-}-$filename
+              done
+          done
+
+          if [ -z "$(ls -A tests/fixtures)" ]; then
+            echo "No CWL files downloaded!"
+            exit 1
+          fi
+
       - name: Run tests
         run: npm run test
