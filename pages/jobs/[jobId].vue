@@ -238,7 +238,7 @@ const fetchLinkContent = async (href: string) => {
     })
 
     for (const key in response) {
-      const value = response[key]?.value
+      const value = response[key]?.value ?? response[key]
 
       // GeoJSON FeatureCollection
       if (value?.type === 'FeatureCollection') {
