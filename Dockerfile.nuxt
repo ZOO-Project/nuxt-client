@@ -24,9 +24,18 @@ RUN npm install --omit=dev
 # Construye el proyecto
 RUN npm run build
 
+# Crée un utilisateur non-root
+RUN useradd -m appuser
+
+# Corrige les permissions
+RUN chown -R appuser:appuser /usr/src/app
+
+# Passe à l'utilisateur non-root
+USER appuser
+
 # Expone el puerto de la aplicación
 EXPOSE 3000
 
 # Comando para iniciar el servidor en producción
-# CMD ["node", ".output/server/index.mjs"]
-CMD ["npm", "run", "start"]
+CMD ["node", ".output/server/index.mjs"]
+# CMD ["npm", "run", "start"]
