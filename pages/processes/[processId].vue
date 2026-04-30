@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useHead } from '#imports'
 import { ref, onMounted, watch, reactive, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { useRuntimeConfig } from '#imports'
 import { triggerRef } from 'vue'
@@ -15,6 +16,7 @@ const {
 } = useRoute()
  
 const authStore = useAuthStore()
+const { locale, t } = useI18n()
 const config = useRuntimeConfig()
  
 const data = ref(null)
@@ -73,7 +75,7 @@ const getDefaultBbox = (schema: any) => {
 const subscriberValues = ref({
   successUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=success`,
   inProgressUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=inProgress`,
-  failedUri: `${config.public.SUBSCRIBERURL}jobid=JOBSOCKET-${channelId.value}&type=failed`
+  failedUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=failed`
 })
  
  
@@ -85,6 +87,35 @@ const hasContentMedia = (schema: any) =>
     (Array.isArray(schema?.oneOf) && schema.oneOf.some((f: any) => !!f?.contentMediaType))
   )
  
+
+const getArrayItemType = (schema: any): string => {
+  if (!schema || schema.type !== 'array') return ''
+
+  const items = schema.items
+
+  // Literal arrays
+  if (items?.type) {
+    return items.type
+  }
+
+  // Complex arrays
+  if (
+    items?.contentMediaType ||
+    items?.mediaType ||
+    (Array.isArray(items?.oneOf) && items.oneOf.some((o: any) => o?.contentMediaType))
+  ) {
+    return 'complex'
+  }
+
+  return 'unknown'
+}
+
+const isLiteralArraySchema = (schema: any): boolean => {
+  if (schema?.type !== 'array') return false
+  const t = getArrayItemType(schema)
+  return ['string', 'number', 'integer', 'boolean'].includes(t)
+}
+
 // Collect supported formats (oneOf contentMediaType or contentMediaType field). Ensure application/json is present.
 const getSupportedFormats = (schema: any): string[] => {
   const list: string[] = []
@@ -104,37 +135,162 @@ const getSupportedFormats = (schema: any): string[] => {
   return Array.from(new Set(list))
 }
  
- 
-// Provide a readable label for the q-badge (so complex shows the media type OR href/value mode)
-const typeLabel = (input: any, valForInputId: any) => {
-  if (hasContentMedia(input.schema)) {
-    // Handle array case (multiple complex inputs)
-    if (Array.isArray(valForInputId)) {
-      const item = valForInputId[0]
-      if (item?.mode === 'href') return 'complex (provide URL)'
-      if (item?.mode === 'value') {
-        const fmt = item?.format
-        return fmt ? `complex (${fmt})` : 'Provide Value Inline'
-      }
-    }
-    // Handle single complex input
-    else if (valForInputId && typeof valForInputId === 'object') {
-      if (valForInputId.mode === 'href') return 'complex (provide URL)'
-      if (valForInputId.mode === 'value') {
-        const fmt = valForInputId?.format
-        return fmt ? `complex (${fmt})` : 'Provide Value Inline'
-      }
-    }
-    return 'complex'
+
+const isUriLiteralInput = (input: any): boolean => {
+  const schema = input?.schema;
+  if (!schema) return false;
+
+  if (schema.format === 'uri' || schema.format === 'url') {
+    return true;
   }
-  return input?.schema?.type || 'literal'
-}
+
+  if (
+    schema.contentMediaType === 'text/uri-list' ||
+    schema.contentMediaType === 'application/uri'
+  ) {
+    return true;
+  }
+
+  const variants = schema.anyOf || schema.oneOf;
+  if (Array.isArray(variants)) {
+    return variants.some(
+      (v) =>
+        v?.format === 'uri' ||
+        v?.format === 'url' ||
+        v?.contentMediaType === 'text/uri-list'
+    );
+  }
+
+  return false;
+};
+
+
+// Provide a readable label for the q-badge (so complex shows the media type OR href/value mode)
+const typeLabel = (input: any, inputId: string, valForInputId?: any) => {
+
+  if (hasContentMedia(input.schema)) {
+
+    if (Array.isArray(valForInputId) && valForInputId.length > 0) {
+      const item = valForInputId[0];
+
+      if (item?.mode === 'href') {
+        return 'complex (URL)';
+      }
+
+      if (item?.mode === 'value') {
+        const fmt = item?.format;
+        return fmt ? `complex (${fmt})` : 'complex (inline value)';
+      }
+    }
+
+    if (valForInputId && typeof valForInputId === 'object') {
+      if (valForInputId.mode === 'href') {
+        return 'complex (URL)';
+      }
+
+      if (valForInputId.mode === 'value') {
+        const fmt = valForInputId?.format;
+        return fmt ? `complex (${fmt})` : 'complex (inline value)';
+      }
+    }
+
+    return 'complex';
+  }
+
+  if (input?.schema?.type === 'array') {
+    const itemType = getArrayItemType(input.schema);
+    return `array(${itemType})`;
+  }
+
+  if (isUriLiteralInput(input, inputId)) {
+    return 'string (URI)';
+  }
+
+  if (input?.schema?.type) {
+    return input.schema.type;
+  }
+
+  return 'string';
+};
+
  
+const normalizeBboxSchema = (schema: any) => {
+  if (!schema) return schema
+
+  // Already correct — nothing to do
+  if (
+    schema.type === 'object' &&
+    schema.format === 'ogc-bbox' &&
+    schema.properties?.bbox &&
+    schema.properties?.crs
+  ) {
+    return schema
+  }
+
+  // Case 1: flattened bbox schema (items + crs at same level)
+  if (
+    schema.format === 'ogc-bbox' &&
+    schema.items &&
+    schema.crs
+  ) {
+    return {
+      type: 'object',
+      format: 'ogc-bbox',
+      required: ['bbox', 'crs'],
+      properties: {
+        bbox: {
+          type: 'array',
+          oneOf: [
+            { minItems: 4, maxItems: 4 },
+            { minItems: 6, maxItems: 6 }
+          ],
+          items: schema.items
+        },
+        crs: schema.crs
+      },
+      nullable: schema.nullable ?? false
+    }
+  }
+
+  // Case 2: allOf reference (bbox.yaml / ogc-bbox)
+  if (Array.isArray(schema.allOf)) {
+    const hasOgcBbox = schema.allOf.some(
+      s => s?.format === 'ogc-bbox' || /bbox\.yaml$/i.test(s?.['$ref'])
+    )
+
+    if (hasOgcBbox) {
+      return {
+        type: 'object',
+        format: 'ogc-bbox',
+        required: ['bbox', 'crs'],
+        properties: {
+          bbox: {
+            type: 'array',
+            oneOf: [
+              { minItems: 4, maxItems: 4 },
+              { minItems: 6, maxItems: 6 }
+            ],
+            items: { type: 'number', format: 'double' }
+          },
+          crs: {
+            type: 'string',
+            format: 'uri',
+            default: 'urn:ogc:def:crs:EPSG:6.6:4326'
+          }
+        }
+      }
+    }
+  }
+
+  return schema
+}
+
 const fetchData = async () => {
   try {
     data.value = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${processId}`, {
       headers: {
-        Authorization: `Bearer ${authStore.token?.access_token}`
+        Authorization: `Bearer ${authStore.token?.access_token}`,
+        'Accept-Language': locale.value
       }
     })
  
@@ -144,18 +300,41 @@ const fetchData = async () => {
           requiredInputs.value.push(key)
         }
 
-       if (input.minOccurs === 0) {
+        if (input.minOccurs === 0) {
           enabledInputs[key] = false;
         } else {
           enabledInputs[key] = true;
         }
- 
+
+        if (
+          input.schema?.type === 'array' &&
+          !hasContentMedia(input.schema)
+        ) {
+          const defaults = input.schema?.default ?? [];
+
+          inputValues.value[key] = Array.isArray(defaults) && defaults.length
+            ? defaults.map(v => ({
+                mode: 'value',
+                value: String(v),
+                href: ''
+              }))
+            : [
+                {
+                  mode: 'value',
+                  value: '',
+                  href: ''
+                }
+              ];
+
+          continue;
+        }
+
         // COMPLEX input (single or oneOf/contentMediaType)
         if (hasContentMedia(input.schema)) {
           const supportedFormats = getSupportedFormats(input.schema)
           const hrefOptions = input?.example?.hrefOptions || []
- 
-          if (input.maxOccurs && input.maxOccurs > 1) {
+
+          if (isMultiValueInput(input)) { 
             // multiple allowed → array
             inputValues.value[key] = [
               {
@@ -199,8 +378,7 @@ const fetchData = async () => {
         // Bounding Box input — support old schema + new allOf/ogc-bbox/bbox.yaml variants
         const detectBboxFromSchema = (schema: any) => {
           if (!schema) return null;
- 
-          // --- Old-style bbox detection ---
+
           if (schema.type === 'object' && schema.properties) {
             const props = schema.properties || {};
             for (const key of Object.keys(props)) {
@@ -213,19 +391,15 @@ const fetchData = async () => {
               }
             }
           }
- 
-          // --- New-style allOf detection ---
+
           if (Array.isArray(schema.allOf)) {
             for (const s of schema.allOf) {
-              // ogc-bbox format
               if (s?.format === 'ogc-bbox') {
                 return { propName: 'bbox', crsDefault: 'EPSG:4326' };
               }
-              // bbox.yaml reference
               if (typeof s?.['$ref'] === 'string' && /bbox\.yaml$/i.test(s['$ref'])) {
                 return { propName: 'bbox', crsDefault: 'EPSG:4326' };
               }
-              // nested object schema
               const nested = detectBboxFromSchema(s);
               if (nested) return nested;
             }
@@ -244,13 +418,8 @@ const fetchData = async () => {
           });
           continue;
         }
- 
-        // Multiple literal inputs (array but not complex)
-        if (input.schema?.type === 'array') {
-          inputValues.value[key] = ['']
-          continue
-        }
- 
+
+
         // Default init for literal input
         inputValues.value[key] = input.schema?.default ?? (input.schema?.type === 'number' ? 0 : '')
       }
@@ -376,8 +545,11 @@ const iconMap: Record<string, string> = {
   organization: "business",
   license: "description",
   keywords: "tag",
+  address: 'place',
   codeRepository: "cloud_upload",
 };
+
+const SCHEMA_INTERNAL_KEYS = ['class', '@context', '@type'];
 
 // Convert URL - softwareVersion
 const extractMetaType = (role: string) => {
@@ -394,6 +566,39 @@ const openSchema = (url) => {
   window.open(url, "_blank");
 };
 
+const normalizeType = (type: string) => {
+  if (!type) return null;
+
+  // Remove namespace prefix 
+  if (type.includes(':')) {
+    return type.split(':')[1];
+  }
+
+  return type;
+};
+
+const getEntityType = (value: any) => {
+  const type = value?.['@type'];
+  return type ? normalizeType(type) : null;
+};
+
+const getEntitySchemaUrl = (value: any) => {
+  const type = normalizeType(value?.['@type']);
+  return type ? `https://schema.org/${type}` : null;
+};
+
+const getRenderableFields = (value: any) => {
+  if (!value || typeof value !== 'object') return []
+  return Object.entries(value).filter(
+    ([key]) => !SCHEMA_INTERNAL_KEYS.includes(key)
+  )
+}
+
+const prettyAddressKey = (key: string) => {
+  if (key === 's:addressCountry' || key === 'addressCountry') return 'Country'
+  return key
+}
+
  
 onMounted(async () => {
   if (process.client) {
@@ -408,12 +613,12 @@ onMounted(async () => {
  
 const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
   const result: Record<string, any> = {}
- 
+
   for (const [key, outputArray] of Object.entries(outputs)) {
     if (outputArray && outputArray.length > 0) {
       const outputConfig: any = {}
-     
-      // Parcourir chaque élément du tableau
+
+      // Iterate through each item in the array
       outputArray.forEach(item => {
         if (item.id === 'transmission') {
           outputConfig.transmissionMode = item.cval
@@ -423,7 +628,7 @@ const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
           }
         }
       })
-     
+
       result[key] = outputConfig
     }
   }
@@ -458,6 +663,17 @@ watch(
         bbox: val.bbox,
         crs: toUrn(val.crs || 'EPSG:4326')
       }
+        continue
+      }
+
+      if (
+        Array.isArray(val) &&
+        data.value.inputs[key]?.schema &&
+        isLiteralArraySchema(data.value.inputs[key].schema)
+      ) {
+        formattedInputs[key] = val
+          .filter(v => v?.value !== undefined && v?.value !== '')
+          .map(v => v.value)
         continue
       }
  
@@ -506,24 +722,30 @@ watch(
 const pollJobStatus = async (jobId: string) => {
   const jobUrl = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId}`
   const headers = {
-    Authorization: `Bearer ${authStore.token?.access_token}`
+    Authorization: `Bearer ${authStore.token?.access_token}`,
+    'Accept-Language': locale.value
   }
  
   while (true) {
     try {
       const job = await $fetch(jobUrl, { headers })
       jobStatus.value = job.status
- 
-      if (job.status === 'successful') {
-        response.value = job
-        loading.value = false
-        break
-      } else if (job.status === 'failed') {
-        response.value = { error: 'Job failed', details: job }
+
+      // Stop polling when job is finished or canceled
+      if (['successful', 'failed', 'canceled'].includes(job.status)) {
+        if (job.status === 'successful') {
+          response.value = job
+        } else if (job.status === 'failed') {
+          response.value = { error: 'Job failed', details: job }
+        } else if (job.status === 'canceled') {
+          response.value = { info: 'Job was canceled', details: job }
+        }
+
         loading.value = false
         break
       }
- 
+
+      // Poll every 2 seconds
       await new Promise(resolve => setTimeout(resolve, 2000))
     } catch (err) {
       console.error('Polling error:', err)
@@ -595,10 +817,8 @@ function validateAndSubmit() {
  
  
 const submitProcess = async () => {
-  if (loading.value || submitting.value) {
-    return;
-  }
- 
+  if (loading.value || submitting.value) return;
+
   if (!validateRequiredInputs()) {
     $q.notify({
       type: "negative",
@@ -615,18 +835,22 @@ const submitProcess = async () => {
  
     let wsUrl = "";
     if (typeof window !== "undefined") {
-      wsUrl = `ws://${window.location.hostname}:8888/`;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      // Use wss or ws to access the WebSocket
+      const hostname = window.location.hostname.replace(/^webui\./, 'ws.');
+      wsUrl = `${protocol}//${hostname}/`;
     }
  
   // subscriber URLs for async only
   const subscribers = {
-    successUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${channelId.value}&type=success`,
-    inProgressUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${channelId.value}&type=inProgress`,
-    failedUri: `http://zookernel/cgi-bin/publish.py?jobid=JOBSOCKET-${channelId.value}&type=failed`,
+    successUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=success`,
+    inProgressUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=inProgress`,
+    failedUri: `${config.public.SUBSCRIBERURL}?jobid=JOBSOCKET-${channelId.value}&type=failed`,
   };
- 
+
   try {
     const originalPayload = JSON.parse(jsonRequestPreview.value || "{}");
+
     if (preferMode.value === "respond-async") {
       originalPayload.executionOptions = originalPayload.executionOptions ?? {};
       originalPayload.executionOptions.subscriber = { ...subscribers };
@@ -642,6 +866,7 @@ const submitProcess = async () => {
         headers: {
           Authorization: `Bearer ${authStore.token?.access_token}`,
           "Content-Type": "application/json",
+          'Accept-Language': locale.value,
           Prefer: preferMode.value+(preferMode.value=="respond-async"?";return=representation":""),
         },
         body: JSON.stringify(originalPayload),
@@ -650,17 +875,21 @@ const submitProcess = async () => {
  
    
     if (preferMode.value === "respond-async") {
-      //  Async execution (requires jobID + websocket updates)
       if (!res || !res.jobID) {
         throw new Error("Expected async response with jobID, but got none");
       }
  
       jobId.value = res.jobID;
-      console.log(" Job submitted (server jobID):", res.jobID);
- 
+      console.log("Job submitted (server jobID):", res.jobID);
+
+      // Start polling in parallel to WS
+      pollJobStatus(res.jobID);
+
+      // WebSocket connection (optional real-time updates)
       ws = new WebSocket(wsUrl);
+
       ws.onopen = () => {
-        console.log(" WebSocket connected — subscribing to", "JOBSOCKET-" + channelId.value);
+        console.log("WebSocket connected — subscribing to", "JOBSOCKET-" + channelId.value);
         ws.send("SUB JOBSOCKET-" + channelId.value);
       };
  
@@ -673,20 +902,21 @@ const submitProcess = async () => {
           const msgId = msg.id ?? null;
  
           if (msgJobId !== "JOBSOCKET-" + channelId.value && msgId !== jobId.value) {
-            if(event.data!="1"){
+            if (event.data != "1") {
               progressPercent.value = 100;
               progressMessage.value = "Completed successfully";
               response.value = JSON.parse(event.data);
               loading.value = false;
               ws?.close();
-            }else
+            } else {
               console.log("Ignored WS message, not for this job:", msgJobId, msgId);
+            }
             return;
           }
 
-          if (jobStatus.value === 'canceled') {
-            loading.value = false
-            ws?.close()
+          if (jobStatus.value === "canceled") {
+            loading.value = false;
+            ws?.close();
           }
  
           // handle progress
@@ -711,7 +941,7 @@ const submitProcess = async () => {
             jobStatus.value = "running...";
           }
         } catch (e) {
-          console.error(" Invalid WS message:", event.data, e);
+          console.error("Invalid WS message:", event.data, e);
         }
       };
  
@@ -721,17 +951,15 @@ const submitProcess = async () => {
       };
  
     } else {
-      //  Sync execution (result returned immediately)
-      console.log(" Sync execution result:", res);
- 
-      //  Check if error response
+      // Sync execution
+      console.log("Sync execution result:", res);
+
       if (res.error) {
-        console.error(" Sync execution error:", res.error);
+        console.error("Sync execution error:", res.error);
         progressMessage.value = res.error.description || "Execution failed";
         jobStatus.value = "failed";
         response.value = res;
       } else {
-        // No status - treat as successful raw result
         progressPercent.value = 100;
         progressMessage.value = "Completed successfully (sync)";
         jobStatus.value = "successful";
@@ -750,12 +978,13 @@ const submitProcess = async () => {
     submitting.value = false;
   }
 };
+
  
  
  
  
 const isMultipleInput = (input: any) => {
-  return input.maxOccurs && input.maxOccurs > 1
+  return isMultiValueInput(input)
 }
  
 const isBoundingBoxInput = (input: any): boolean => {
@@ -796,26 +1025,63 @@ const isComplexInput = (input: any) => {
     )
   )
 }
- 
+
+const isMultiValueInput = (input: any): boolean => {
+  // New OGC API – Processes schema
+  if (input?.schema?.type === 'array') {
+    return true
+  }
+
+  // Old EOEPCA / CWL schemas
+  if (input?.['extended-schema']?.type === 'array') {
+    return true
+  }
+
+  if (typeof input?.maxOccurs === 'number' && input.maxOccurs > 1) {
+    return true
+  }
+
+  const cwlType = input?.metadata?.find(
+    (m: any) => m.title === 'cwl:type'
+  )?.value
+
+  if (typeof cwlType === 'string' && cwlType.includes('[]')) {
+    return true
+  }
+
+  return false
+}
+
 const DEFAULT_SUPPORTED_FORMATS = ['application/json', 'text/plain']
  
 const addInputField = (inputId: string) => {
- 
+  const input = data.value.inputs[inputId];
+
   if (!Array.isArray(inputValues.value[inputId])) {
-    inputValues.value[inputId] = []
+    inputValues.value[inputId] = [];
   }
- 
-  const currentFormats = inputValues.value[inputId][0]?.availableFormats || DEFAULT_SUPPORTED_FORMATS
- 
+
+  if (input.schema?.type === 'array' && !isComplexInput(input)) {
+    inputValues.value[inputId].push({
+      mode: 'value',
+      value: '',
+      href: ''
+    });
+    triggerRef(inputValues);
+    return;
+  }
+
+  const currentFormats = inputValues.value[inputId][0]?.availableFormats || DEFAULT_SUPPORTED_FORMATS;
+
   inputValues.value[inputId].push({
     mode: 'value',
     value: '',
     href: '',
     format: currentFormats[0],
     availableFormats: currentFormats
-  })
- 
-  triggerRef(inputValues)
+  });
+
+  triggerRef(inputValues);
 }
  
 const removeInputField = (inputId: string, index: number) => {
@@ -1280,26 +1546,33 @@ watch(data, (val) => {
   }
 })
 
+// Cancel job while it is running or submitted
 async function cancelJob() {
   if (!jobId.value) return
+
   isCanceling.value = true
+
   try {
     const url = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId.value}`
+    
     await $fetch(url, {
       method: 'DELETE',
       headers: {
         Authorization: `Bearer ${authStore.token?.access_token}`
       }
     })
-    jobStatus.value = 'canceled'
-    loading.value = false              
-    submitting.value = false         
-    jobId.value = null                 
-    stopJobTracking()
+
+    jobStatus.value = 'canceled' 
+    loading.value = false
+    submitting.value = false
+
+    stopJobTracking()              
     $q.notify({
-      type: 'warning',
+      type: 'positive',
       message: 'Execution canceled'
     })
+
+    // DO NOT null jobId.value here so user can still delete the job if needed
   } catch (err) {
     console.error(err)
     $q.notify({
@@ -1311,14 +1584,65 @@ async function cancelJob() {
   }
 }
 
+const deleteJob = async () => {
+  if (!jobId.value) return
+  isCanceling.value = true
+  try {
+    const url = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId.value}`
+    await $fetch(url, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${authStore.token?.access_token}`,
+        'Accept-Language': locale.value
+      }
+    })
+    jobStatus.value = ''
+    response.value = null
+    jobId.value = null
+    $q.notify({ type: 'positive', message: 'Job deleted successfully' })
+  } catch (err) {
+    console.error(err)
+    $q.notify({ type: 'negative', message: 'Delete Failed' })
+  } finally {
+    isCanceling.value = false
+  }
+}
+
 function stopJobTracking() {
   if (ws) {
     ws.close()
     ws = null
   }
 }
- 
- 
+
+function getFormatAndRef(input) {
+  const schemaCandidates = [
+    input['original-schema'],
+    input.schema
+  ].filter(Boolean);
+
+  for (const schema of schemaCandidates) {
+    if (Array.isArray(schema.allOf)) {
+      let format, ref;
+
+      for (const item of schema.allOf) {
+        if (item.format) format = item.format;
+        if (item.$ref) ref = item.$ref;
+      }
+
+      if (format || ref) {
+        return { format, ref };
+      }
+    }
+  }
+
+  // fallback
+  return {
+    format: input.schema?.format || input.schema?.type,
+    ref: input.schema?.$ref
+  };
+}
+
 </script>
 
 <template>
@@ -1327,15 +1651,19 @@ function stopJobTracking() {
       flat
       icon="help_outline"
       color="primary"
-      label="Help"
+      :label="t('Help')"
       @click="helpVisible = true"
       class="q-mb-md"
     />
-   
     <HelpDialog
       v-model="helpVisible"
-      :help-content="helpContent"
-    />
+      :title="t('Processes Help')"
+    >
+      <div
+        v-if="helpContent"
+        v-html="helpContent"
+      />
+    </HelpDialog>
   <q-page class="q-pa-md">
     <div v-if="data">
    
@@ -1349,14 +1677,14 @@ function stopJobTracking() {
         <q-card class="q-pa-md rounded-borders bg-grey-1">
 
           <div class="row q-mb-sm">
-            <div class="col-3 text-weight-bold text-grey-7">Software Version</div>
+            <div class="col-3 text-weight-bold text-grey-7">{{ t('Software Version') }}</div>
             <div class="col">
               {{ data.version || '—' }}
             </div>
           </div>
 
           <div class="row q-mb-sm">
-            <div class="col-3 text-weight-bold text-grey-7">Keywords</div>
+            <div class="col-3 text-weight-bold text-grey-7">{{ t('Keywords') }}</div>
             <div class="col">
               <span v-if="data.keywords?.length">
                 {{ data.keywords.join(', ') }}
@@ -1368,11 +1696,11 @@ function stopJobTracking() {
           <q-expansion-item
             expand-separator
             icon="info"
-            label="Additional Metadata"
+            :label="t('Additional Metadata')"
             dense
             dense-toggle
             class="rounded-borders bg-white q-mt-md shadow-1"
-          >
+            >
             <q-card-section>
 
               <div v-if="data.metadata?.length">
@@ -1408,70 +1736,114 @@ function stopJobTracking() {
                   {{ md.title }}
                 </div>
 
-                  <!--Person object -->
-                  <div
-                    v-if="md.value?.['@type'] === 'Person'"
-                    class="q-mt-xs text-grey-8"
-                  >
-                    <div><strong>Name:</strong> {{ md.value.name }}</div>
-                    <div v-if="md.value.email">
-                      <strong>Email:</strong>
-                      <a :href="'mailto:' + md.value.email" class="text-primary">{{ md.value.email }}</a>
-                    </div>
-                    <div v-if="md.value.affiliation">
-                      <strong>Affiliation:</strong> {{ md.value.affiliation }}
-                    </div>
-                  </div>
+                      <!-- Simple string value -->
+                      <div v-else-if="typeof md.value === 'string'" class="q-mt-xs text-grey-8 long-text">
+                        <template v-if="isUrl(md.value)">
+                          <a :href="md.value" target="_blank" class="text-primary">
+                            {{ md.value }}
+                          </a>
+                        </template>
+                        <template v-else>
+                          {{ md.value }}
+                        </template>
+                      </div>
 
-                  <!-- Organization object -->
-                  <div
-                    v-else-if="md.value?.['@type'] === 'Organization'"
-                    class="q-mt-xs text-grey-8"
-                  >
-                    <div><strong>Name:</strong> {{ md.value.name }}</div>
+                      <!-- Object value -->
+                      <div v-else-if="typeof md.value === 'object'" class="q-mt-xs">
 
-                    <div v-if="md.value.url">
-                      <strong>URL:</strong>
-                      <a :href="md.value.url" target="_blank" class="text-primary">
-                        {{ md.value.url }}
-                      </a>
-                    </div>
+                        <!-- ENTITY TYPE -->
+                        <div
+                          v-if="getEntityType(md.value)"
+                          class="text-caption text-primary cursor-pointer q-mb-xs"
+                          @click="openSchema(getEntitySchemaUrl(md.value))"
+                        >
+                          {{ getEntityType(md.value) }}
+                        </div>
 
-                    <div v-if="md.value.address">
-                      <strong>Country:</strong>
-                      {{
-                        md.value.address.addressCountry ||
-                        md.value.address["s:addressCountry"] ||
-                        md.value.address.country ||
-                        '—'
-                      }}
-                    </div>
-                  </div>
 
-                  <!-- Simple string value -->
-                  <div v-else-if="typeof md.value === 'string'" class="q-mt-xs text-grey-8">
-                    {{ md.value }}
-                  </div>
 
-                  <!-- Nested object -->
-                  <div v-else-if="typeof md.value === 'object'" class="q-mt-xs">
-                    <div
-                      v-for="(v, key) in md.value"
-                      :key="key"
-                      class="q-mb-xs text-grey-8"
-                    >
-                      <strong>{{ key }}:</strong>
-                      
-                      <!-- If URL inside nested value -->
-                      <template v-if="isUrl(v)">
-                        <a :href="v" target="_blank" class="text-primary">{{ v }}</a>
-                      </template>
+                        <!-- ENTITY FIELDS -->
+                          <div
+                            v-for="([key, v], i) in getRenderableFields(md.value)"
+                            :key="i"
+                            class="q-mb-xs text-grey-8"
+                          >
 
-                      <template v-else>
-                        {{ v }}
-                      </template>
-                    </div>
-                  </div>
+                        <template v-if="key === 'address' && typeof v === 'object'">
+                          <div class="q-mt-sm">
+                            <strong>
+                              <q-icon name="place" size="14px" class="q-mr-xs text-primary" />
+                              address:
+                            </strong>
+
+                            <div class="q-ml-lg q-mt-xs">
+                              <div
+                                v-for="([addrKey, addrVal], i) in getRenderableFields(v)"
+                                :key="i"
+                                class="q-mb-xs"
+                              >
+                                <strong>{{ prettyAddressKey(addrKey) }}:</strong>
+                                <span class="q-ml-xs">{{ addrVal }}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </template>
+
+                          
+                        <template v-else>
+                          <strong class="q-mr-xs">{{ key }}:</strong>
+
+                          <!--  If nested object -->
+                          <template v-if="typeof v === 'object'">
+                            <div class="q-ml-md q-mt-xs">
+
+                              <div
+                                v-if="getEntityType(v)"
+                                class="text-caption text-primary cursor-pointer q-mb-xs"
+                                @click="openSchema(getEntitySchemaUrl(v))"
+                              >
+                                {{ getEntityType(v) }}
+                              </div>
+
+                              <div
+                                v-for="([nestedKey, nestedVal], j) in getRenderableFields(v)"
+                                :key="j"
+                                class="q-mb-xs"
+                              >
+                                <strong>{{ normalizeType(nestedKey) }}:</strong>
+
+                                <span class="q-ml-xs">
+                                  <template v-if="isUrl(nestedVal)">
+                                    <a :href="nestedVal" target="_blank" class="text-primary">
+                                      {{ nestedVal }}
+                                    </a>
+                                  </template>
+                                  <template v-else>
+                                    {{ nestedVal }}
+                                  </template>
+                                </span>
+
+                              </div>
+                            </div>
+                          </template>
+
+                          <!-- If string -->
+                          <template v-else>
+                            <span class="long-text">
+                              <template v-if="isUrl(v)">
+                                <a :href="v" target="_blank" class="text-primary">
+                                  {{ v }}
+                                </a>
+                              </template>
+                              <template v-else>
+                                {{ v }}
+                              </template>
+                            </span>
+                          </template>
+                        </template>
+                        </div>
+
+                      </div>                 
 
                 </div>
 
@@ -1495,7 +1867,7 @@ function stopJobTracking() {
  
         <div class="q-mb-lg">
           <div class="text-h4 text-weight-bold text-primary q-mb-sm">
-            Inputs
+            {{ t('Inputs') }}
           </div>
           <q-separator class="q-mt-md" />
         </div>
@@ -1520,10 +1892,15 @@ function stopJobTracking() {
            :class="input.minOccurs === 0 ? 'q-pa-sm bg-grey-1 rounded-borders' : ''">
  
             <div class="q-gutter-sm">
-              <q-badge color="grey-3" text-color="black" class="q-mb-sm">
-                {{ typeLabel(input, inputValues[inputId]) }}
+              <q-badge
+                v-if="!isBoundingBoxInput(input)"
+                color="grey-3"
+                text-color="black"
+                class="q-mb-sm"
+              >
+                {{ typeLabel(input, inputId) }}
               </q-badge>
- 
+              
               <!-- Complex Input (Multiple or Single) -->
               <template v-if="isComplexInput(input)">
                 <template v-if="Array.isArray(inputValues[inputId])">
@@ -1598,7 +1975,7 @@ function stopJobTracking() {
  
                   <!-- Add button -->
                   <q-btn
-                    v-if="isMultipleInput(input)"
+                    v-if="isMultiValueInput(input)"
                     flat
                     icon="add"
                     label="Add Another"
@@ -1660,15 +2037,38 @@ function stopJobTracking() {
               <!--  Bounding Box Input with Leaflet Popup -->
               <template v-else-if="isBoundingBoxInput(input)">
                 <div class="bbox-input q-pa-sm bg-grey-1 rounded-borders">
-                  <div class="text-subtitle1 text-weight-medium q-mb-xs">
-                    {{ inputId }} (Bounding Box)
-                  </div>
- 
-                  <!-- Show current bbox -->
-                  <div class="q-mb-sm">
-                    <q-badge color="blue-2" text-color="black" label="BBox:" />
-                    <span class="q-ml-sm text-grey-8">{{ inputValues[inputId].bbox }}</span>
-                    <q-btn flat dense icon="edit" @click="openBboxPopup(inputId)">
+
+                  <div class="q-mb-sm row items-center">
+
+                    <a
+                      v-if="getFormatAndRef(input).ref && getFormatAndRef(input).format"
+                      :href="getFormatAndRef(input).ref"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-primary text-weight-medium q-mr-sm"
+                    >
+                      {{ getFormatAndRef(input).format }}:
+                    </a>
+
+                    <span
+                      v-else
+                      class="text-primary text-weight-medium q-mr-sm"
+                    >
+                      {{ getFormatAndRef(input).format || input.schema.type || input.schema?.$ref || '—' }}:
+                    </span>
+                    
+                    <span class="text-grey-8">
+                      [{{ inputValues[inputId].bbox.join(', ') }}]
+                    </span>
+
+                    
+                    <q-btn
+                      flat
+                      dense
+                      icon="edit"
+                      class="q-ml-xs"
+                      @click="openBboxPopup(inputId)"
+                    >
                       <q-tooltip>Edit Bounding Box on Map</q-tooltip>
                     </q-btn>
                   </div>
@@ -1701,7 +2101,7 @@ function stopJobTracking() {
               </template>
  
               <!-- Multiple Value Input -->
-              <template v-else-if="Array.isArray(inputValues[inputId])">
+              <template v-else-if="isMultiValueInput(input) && Array.isArray(inputValues[inputId]) && !isComplexInput(input)">
                 <div
                   v-for="(val, idx) in inputValues[inputId]"
                   :key="idx"
@@ -1709,8 +2109,8 @@ function stopJobTracking() {
                 >
                   <q-input
                     filled
-                    v-model="inputValues[inputId][idx]"
-                    :type="input.schema?.type === 'number' ? 'number' : 'text'"
+                    v-model="inputValues[inputId][idx].value"
+                    :type="input.schema?.items?.type === 'number' ? 'number' : 'text'"
                     :label="`${input.title || inputId} ${idx + 1}`"
                     dense
                     style="flex: 1"
@@ -1730,6 +2130,17 @@ function stopJobTracking() {
                     <q-tooltip>Remove</q-tooltip>
                   </q-btn>
                 </div>
+
+                <!-- ✅ THIS WAS MISSING -->
+                <q-btn
+                  v-if="isMultiValueInput(input)"
+                  flat
+                  icon="add"
+                  label="Add Another"
+                  size="sm"
+                  class="q-mt-sm"
+                  @click="addInputField(inputId)"
+                />
               </template>
  
               <!-- Literal Input -->
@@ -1790,7 +2201,7 @@ function stopJobTracking() {
  
         <div class="q-mb-lg">
           <div class="text-h4 text-weight-bold text-primary q-mb-sm">
-            Outputs
+            {{ t('Outputs') }}
           </div>
           <q-separator class="q-mt-md" />
         </div>
@@ -1923,13 +2334,32 @@ function stopJobTracking() {
             :disable="jobStatus === 'running' || jobStatus === 'submitted'"
           />
           <q-btn color="primary" outline label="Show JSON Preview" @click="showDialog = true" />
-          <div v-if="jobStatus === 'running' || jobStatus === 'submitted'" class="q-mt-md">
+          <!-- Cancel while job is running / submitted -->
+          <div
+            v-if="jobStatus === 'submitted' || jobStatus === 'running'"
+            class="q-mt-md"
+          >
             <q-btn
-              label="Cancel"
               color="negative"
               icon="cancel"
               :loading="isCanceling"
               @click="cancelJob"
+              :label="isCanceling ? 'Canceling…' : 'Cancel Job'"
+            />
+          </div>
+
+          <!-- Delete after job finished -->
+          <div
+            v-else-if="jobStatus === 'successful' || jobStatus === 'failed'"
+            class="q-mt-md"
+          >
+            <q-btn
+              color="negative"
+              outline
+              icon="delete"
+              :loading="isCanceling"
+              @click="deleteJob"
+              :label="isCanceling ? 'Deleting…' : 'Delete Job'"
             />
           </div> 
         </div>
@@ -1995,7 +2425,7 @@ function stopJobTracking() {
           </div>
         </div>
       </div>
- 
+
       <div class="q-mt-lg" v-if="response">
         <h6>Execution Response</h6>
         <details>

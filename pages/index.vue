@@ -18,9 +18,13 @@
         <!-- ✅ Help Dialog -->
         <HelpDialog
           v-model="helpVisible"
-          title="Home Help"
-          :help-content="helpContent"
-        />
+          :title="t('Home Help')"
+        >
+          <div
+            v-if="helpContent"
+            v-html="helpContent"
+          />
+        </HelpDialog>
 
         <q-card v-if="apiInfo" class="q-pa-md q-mb-lg">
           <q-card-section>

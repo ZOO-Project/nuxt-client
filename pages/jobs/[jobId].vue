@@ -78,23 +78,14 @@
       </div>
     </div>
 
-
-    <q-dialog v-model="showModal" persistent>
-      <q-card style="min-width: 600px; max-width: 90vw;">
-        <q-card-section class="row items-center q-pb-none">
-          <div class="text-h6">{{ t('Link Content') }}</div>
-          <q-space />
-          <q-btn icon="close" flat round dense @click="showModal = false" />
-        </q-card-section>
-
-        <q-card-section>
-          <div v-if="modalContent">
-            <pre>{{ modalContent }}</pre>
-          </div>
-          <div v-else class="text-negative">{{ t('No data or failed to fetch') }}</div>
-        </q-card-section>
-      </q-card>
-    </q-dialog>
+    <AppDialog
+      v-model="showModal"
+      :title="t('Link Content')"
+    >
+      <div v-if="modalContent">
+        <pre class="pre-content">{{ modalContent }}</pre>
+      </div>
+    </AppDialog>
   </q-page>
 </template>
 
@@ -113,6 +104,10 @@ import OSM from 'ol/source/OSM'
 import GeoJSON from 'ol/format/GeoJSON'
 import VectorSource from 'ol/source/Vector'
 import VectorLayer from 'ol/layer/Vector'
+import Feature from 'ol/Feature'
+import Polygon from 'ol/geom/Polygon'
+
+import AppDialog from '~/components/modal/AppDialog.vue'
 
 const route = useRoute()
 const config = useRuntimeConfig()
@@ -202,6 +197,30 @@ const linkOptions = computed(() => {
   }))
 })
 
+const extractBBox = (response: any): number[] | null => {
+  // top-level bbox
+  if (Array.isArray(response?.bbox) && response.bbox.length === 4) {
+    return response.bbox
+  }
+
+  // STAC / OGC extent
+  if (response?.extent?.spatial?.bbox?.length) {
+    return response.extent.spatial.bbox[0]
+  }
+
+  // nested result.value
+  for (const key in response) {
+    const val = response[key]?.value
+    if (Array.isArray(val?.bbox) && val.bbox.length === 4) {
+      return val.bbox
+    }
+  }
+
+  return null
+}
+
+
+
 const fetchLinkContent = async (href: string) => {
   const bearer = authStore.token?.access_token
   if (!bearer) {
@@ -219,18 +238,24 @@ const fetchLinkContent = async (href: string) => {
     })
 
     for (const key in response) {
-      if (response[key]?.value) {
-        const featureCollection = response[key].value
-        if (featureCollection?.type === 'FeatureCollection') {
-          geojsonData.value = featureCollection
-          showModal.value = false
-          showMapOnGeojson()
-          return
-        }
+      const value = response[key]?.value ?? response[key]
+
+      // GeoJSON FeatureCollection
+      if (value?.type === 'FeatureCollection') {
+        geojsonData.value = value
+        showModal.value = false
+        showMapOnGeojson()
+        return
+      }
+
+      // bbox only 
+      const bbox = extractBBox(value)
+      if (bbox) {
+        showMapOnBBox(bbox)
+        return
       }
     }
-
-    modalContent.value = JSON.stringify(response, null, 2)
+    modalContent.value = typeof response === 'object' ? JSON.stringify(response, null, 2) : response
     showModal.value = true
 
   } catch (err) {
@@ -239,6 +264,15 @@ const fetchLinkContent = async (href: string) => {
     console.error(err)
   }
 }
+
+function clearVectorLayers() {
+  mapInstance.value?.getLayers().forEach((layer) => {
+    if (layer instanceof VectorLayer) {
+      mapInstance.value.removeLayer(layer)
+    }
+  })
+}
+
 
 async function showMapOnGeojson() {
   await nextTick()
@@ -250,11 +284,7 @@ async function showMapOnGeojson() {
   })
 
  
-  mapInstance.value.getLayers().forEach((layer) => {
-    if (layer instanceof VectorLayer) {
-      mapInstance.value.removeLayer(layer)
-    }
-  })
+  clearVectorLayers()
 
   const vectorSource = new VectorSource({ features })
   const vectorLayer = new VectorLayer({ source: vectorSource })
@@ -268,4 +298,52 @@ async function showMapOnGeojson() {
   })
 }
 
+function showMapOnBBox(bbox: number[]) {
+  if (!mapInstance.value) return
+
+  const [minX, minY, maxX, maxY] = bbox
+
+  const polygon = new Polygon([[
+    [minX, minY],
+    [maxX, minY],
+    [maxX, maxY],
+    [minX, maxY],
+    [minX, minY],
+  ]])
+
+  const feature = new Feature({
+    geometry: polygon,
+  })
+
+  const vectorSource = new VectorSource({
+    features: [feature],
+  })
+
+  const vectorLayer = new VectorLayer({
+    source: vectorSource,
+  })
+
+  clearVectorLayers()
+
+  mapInstance.value.addLayer(vectorLayer)
+
+  mapInstance.value.getView().fit(
+    [minX, minY, maxX, maxY],
+    {
+      padding: [40, 40, 40, 40],
+      maxZoom: 8,
+      duration: 800,
+    }
+  )
+}
+
+
+
 </script>
+
+<style>
+.pre-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+</style>

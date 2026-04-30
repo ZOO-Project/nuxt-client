@@ -124,7 +124,13 @@ const isProcessing = ref(false)
 const router = useRouter()
 const {signOut} = useAuth()
 
-const gravatarUrl = ref('https://www.gravatar.com/avatar/46d229b033af06a191ff2267bca9ae56/')
+const gravatarUrl = ref('https://www.gravatar.com/avatar/46d229b033af06a191ff2267bca9ae56/?d=identicon')
+
+const updateGravatar = (email?: string) => {
+  if (!email) return
+  const hash = stringToMD5(email.trim().toLowerCase())
+  gravatarUrl.value = `https://www.gravatar.com/avatar/${hash}?d=identicon`
+}
 
 
 
@@ -250,11 +256,12 @@ const handleLogout = async () => {
   }
 }
 
+watch(() => authStore.user?.email, (email) => {
+  updateGravatar(email)
+}, { immediate: true })
+
 onMounted(() => {
-  if (authStore.user && authStore.user.email) {
-    gravatarUrl.value = `https://www.gravatar.com/avatar/${stringToMD5(authStore.user.email)}/`
-  }
-  console.log("process.env", process.env)
+  updateGravatar(authStore.user?.email)
 })
 
 </script>

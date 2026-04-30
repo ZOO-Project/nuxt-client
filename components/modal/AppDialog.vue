@@ -6,7 +6,7 @@
   >
     <q-card class="app-dialog">
 
-      <!-- Fixed header -->
+      <!-- header -->
       <q-card-section class="row items-center dialog-header">
         <div class="text-h6">{{ title }}</div>
         <q-space />
@@ -21,17 +21,13 @@
 
       <q-separator />
 
-      <!-- Scrollable body -->
       <q-card-section class="dialog-body">
         <slot />
       </q-card-section>
 
-      <!-- Footer (optional, fixed) -->
+      <!-- Footer -->
       <q-separator v-if="$slots.footer" />
-      <q-card-section
-        v-if="$slots.footer"
-        class="dialog-footer"
-      >
+      <q-card-section v-if="$slots.footer">
         <slot name="footer" />
       </q-card-section>
 
@@ -52,27 +48,24 @@ const emit = defineEmits<{
 
 <style scoped>
 .app-dialog {
-  width: 80vw;
-  max-width: 900px;
-  height: 75vh;
+  min-width: 400px;
+  max-width: 80vw;
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
 }
 
 .dialog-header {
+  position: sticky;
+  top: 0;
   background: white;
-  flex-shrink: 0;
+  z-index: 10;
 }
 
 .dialog-body {
-  flex: 1;
   overflow-y: auto;
-  padding: 16px;
-}
-
-.dialog-footer {
-  background: white;
-  flex-shrink: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 </style>
