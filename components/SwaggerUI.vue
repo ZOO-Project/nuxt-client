@@ -14,9 +14,27 @@ const { resolveOpenApiServerBase, getRequestHeaders } = useOgcApiServer();
 
 onMounted(async () => {
   const fallback = `${config.public.NUXT_ZOO_BASEURL}/ogc-api`;
+  const iamFlagRaw = config.public.ZOO_IAM_ENABLED;
+  const iamEnabled = ['true', '1', 'yes', 'on'].includes(String(iamFlagRaw).toLowerCase());
+  const requiresBearer = String(config.public.ZOO_OGCAPI_REQUIRES_BEARER_TOKEN).toLowerCase() === 'true';
+
+  // Auth state hydration can lag a bit on first page load. When bearer is
+  // required, wait briefly so the initial OpenAPI request does not get
+  // redirected to IAM (CORS failure in browser).
+  if (requiresBearer) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 4000) {
+      const headers = getRequestHeaders();
+      if (headers.Authorization) {
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
   let serverUrl;
 
-  if (config.public.ZOO_IAM_ENABLED === 'true') {
+  if (iamEnabled) {
     // IAM enabled: APISIX may protect the per-user server URL advertised
     // in the OpenAPI spec. Use the static base URL only.
     serverUrl = fallback.replace(/\/+$/, '');
@@ -26,6 +44,11 @@ onMounted(async () => {
     const serverBase = await resolveOpenApiServerBase();
     serverUrl = (serverBase || fallback).replace(/\/+$/, '');
   }
+  console.log('SwaggerUI flags', {
+    iamFlagRaw,
+    iamEnabled,
+    requiresBearer,
+  });
   console.log('SwaggerUI serverUrl', serverUrl);
 
   SwaggerUI({
