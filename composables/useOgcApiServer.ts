@@ -56,6 +56,11 @@ export function useOgcApiServer() {
     return headers
   }
 
+  // Common $fetch options used across pages.
+  const getFetchOptions = (acceptLanguage?: string) => ({
+    headers: getRequestHeaders(acceptLanguage)
+  })
+
   const toAbsoluteServerUrl = (serverUrl: string) => {
     const trimmed = serverUrl.trim()
     if (!trimmed) {
@@ -123,6 +128,7 @@ export function useOgcApiServer() {
   return {
     buildOgcApiUrl,
     getRequestHeaders,
+    getFetchOptions,
     resolveOpenApiServerBase
   }
 }
