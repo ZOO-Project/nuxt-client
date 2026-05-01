@@ -1,41 +1,35 @@
 
-# Usa una imagen base de Node.js
-FROM node:22
+# Stage 1 — build: install all deps (incl. devDeps) and produce .output
+FROM node:22-bookworm-slim AS builder
 
-# Instala Git
-RUN apt-get update && apt-get install -y git
-
-# Establece el directorio de trabajo
 WORKDIR /usr/src/app
-ARG NODE_ENV=production
-ENV NODE_ENV=${NODE_ENV}
+ENV NODE_ENV=production
 
-# Clona el repositorio
-# RUN git clone -b develop https://github.com/ZOO-Project/nuxt-client.git .
-
-# Copia los archivos de tu proyecto
 COPY package*.json ./
+# devDeps required for `nuxt build` (vite, rollup, sass-embedded, ...).
+RUN npm install --no-audit --no-fund && npm cache clean --force
+
 COPY . .
-COPY ./env_sample /usr/src/app/.env
-
-# Instala las dependencias
-RUN npm install --omit=dev
-
-# Construye el proyecto
 RUN npm run build
 
-# Crée un utilisateur non-root
-RUN useradd -m appuser
 
-# Corrige les permissions
-RUN chown -R appuser:appuser /usr/src/app
+# Stage 2 — runtime: only Node + .output. All Nuxt config values are read
+# from process.env at server startup (runtimeConfig), so no rebuild is needed
+# when Kubernetes injects env vars via ConfigMap/Secret.
+FROM node:22-bookworm-slim AS runner
 
-# Passe à l'utilisateur non-root
-USER appuser
+WORKDIR /usr/src/app
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=3000
+ENV NITRO_HOST=0.0.0.0
+ENV NITRO_PORT=3000
 
-# Expone el puerto de la aplicación
+# Ownership set at copy time (avoids slow `chown -R` layer).
+COPY --from=builder --chown=node:node /usr/src/app/.output ./.output
+
+USER node
+
 EXPOSE 3000
 
-# Comando para iniciar el servidor en producción
 CMD ["node", ".output/server/index.mjs"]
-# CMD ["npm", "run", "start"]

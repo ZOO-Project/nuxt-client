@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRuntimeConfig, useRouter } from '#imports'
+import { useRouter } from '#imports'
 import { useI18n } from 'vue-i18n'
 import { QCard, QCardSection, QInput, QBtn, QDialog, QForm, QUploader, QSpinnerGears, Notify } from 'quasar'
 import HelpDialog from '../../components/help/HelpDialog.vue'
@@ -14,7 +14,7 @@ import { nextTick } from 'vue'
 
 const authStore = useAuthStore()
 const { locale, t } = useI18n()
-const config = useRuntimeConfig()
+const { buildOgcApiUrl, getRequestHeaders } = useOgcApiServer()
 
 const data = ref<any>(null)
 const filter = ref('')
@@ -56,12 +56,14 @@ const packageProcess = async (row: any) => {
   modalContent.value = null
   packageError.value = null
   try {
-    const response = await fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${row.id}/package`, {
+    const packageUrl = await buildOgcApiUrl(`/processes/${row.id}/package`, {
+      acceptLanguage: locale.value
+    })
+    const response = await fetch(packageUrl, {
       method: 'GET',
       headers: {
         "Accept": "application/cwl+yaml",
-        'Authorization': `Bearer ${authStore.token?.access_token}`,
-        'Accept-Language': locale.value
+        ...getRequestHeaders(locale.value)
       }
     })
     if (response.ok) {
@@ -150,24 +152,26 @@ const visualizeCwl = async (row: any) => {
     await loadSvgScripts()
 
     //  Fetch the full process metadata (with inputs/outputs)
-    const metaUrl = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${row.id}`
+    const metaUrl = await buildOgcApiUrl(`/processes/${row.id}`, {
+      acceptLanguage: locale.value
+    })
     const metaRes = await fetch(metaUrl, {
       headers: {
         Accept: 'application/json',
-        Authorization: `Bearer ${authStore.token?.access_token}`,
-        'Accept-Language': locale.value
+        ...getRequestHeaders(locale.value)
       }
     })
     const metaData = await metaRes.json()
     selectedProcess.value = metaData
  
 
-    const url = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${row.id}/package`
+    const url = await buildOgcApiUrl(`/processes/${row.id}/package`, {
+      acceptLanguage: locale.value
+    })
     const res = await fetch(url, {
       headers: {
         Accept: 'application/cwl+yaml',
-        Authorization: `Bearer ${authStore.token?.access_token}`,
-        'Accept-Language': locale.value
+        ...getRequestHeaders(locale.value)
       }
     })
     if (!res.ok) {
@@ -344,11 +348,15 @@ const isCheckingConformance = ref(false)
 const checkConformance = async () => {
   isCheckingConformance.value = true
   try {
-    const response = await fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/conformance`, {
+    const conformanceUrl = await buildOgcApiUrl('/conformance', {
+      acceptLanguage: locale.value
+    })
+
+    const response = await fetch(conformanceUrl, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'Accept-Language': locale.value
+        ...getRequestHeaders(locale.value)
       }
     })
 
@@ -377,12 +385,13 @@ const checkConformance = async () => {
 const deleteProcess = async (row: any) => {
   if (confirm(t('Are you sure you want to delete the process') + ` "${row.id}"?`)) {
     try {
-      const response = await fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${row.id}`, {
+      const processUrl = await buildOgcApiUrl(`/processes/${row.id}`, {
+        acceptLanguage: locale.value
+      })
+
+      const response = await fetch(processUrl, {
         method: 'DELETE',
-        headers: { 
-          Authorization: `Bearer ${authStore.token?.access_token}`,
-          'Accept-Language': locale.value 
-        }
+        headers: getRequestHeaders(locale.value)
       })
       if (response.ok) {
         Notify.create({ message: t('Process deleted successfully'), type: 'positive' })
@@ -434,12 +443,15 @@ const submitForm = async () => {
           message: t('Deploying process...'),
           timeout: 2000
     })
-    const response = await fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes?w=${processName.value}`, {
+    const deployUrl = await buildOgcApiUrl(`/processes?w=${processName.value}`, {
+      acceptLanguage: locale.value
+    })
+
+    const response = await fetch(deployUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/cwl+yaml',
-        'Authorization': `Bearer ${authStore.token?.access_token}`,
-        'Accept-Language': locale.value
+        ...getRequestHeaders(locale.value)
       },
       body: fileContent.value,
     })
@@ -473,11 +485,12 @@ const submitForm = async () => {
 
 const fetchData = async () => {
   try {
-    data.value = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes`, {
-      headers: {
-        Authorization: `Bearer ${authStore.token?.access_token}`,
-        'Accept-Language': locale.value
-      }
+    const processesUrl = await buildOgcApiUrl('/processes', {
+      acceptLanguage: locale.value
+    })
+
+    data.value = await $fetch(processesUrl, {
+      headers: getRequestHeaders(locale.value)
     })
   } catch (error) {
     console.error('Error fetching data:', error)

@@ -82,7 +82,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useRuntimeConfig } from '#imports'
 import { useAuthStore } from '~/stores/auth'
 import { useI18n } from 'vue-i18n'
 import { Notify } from 'quasar'
@@ -93,9 +92,9 @@ import jobListHelp from '../../components/help/jobListHelp.js'
 
 import AppDialog from '~/components/modal/AppDialog.vue'
 
-const config = useRuntimeConfig()
 const authStore = useAuthStore()
 const router = useRouter()
+const { buildOgcApiUrl, getRequestHeaders } = useOgcApiServer()
 
 const { locale, t } = useI18n()
 
@@ -115,11 +114,13 @@ const fetchData = async () => {
   try {
     const bearer = authStore.token?.access_token
     if (!bearer) return
-    const response = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs`, {
-      headers: {
-        Authorization: `Bearer ${bearer}`,
-        'Accept-Language': locale.value
-      }
+
+    const jobsUrl = await buildOgcApiUrl('/jobs', {
+      acceptLanguage: locale.value
+    })
+
+    const response = await $fetch(jobsUrl, {
+      headers: getRequestHeaders(locale.value)
     })
     data.value = response
   } catch (error) {
@@ -141,10 +142,7 @@ const fetchLinkContent = async (href: string) => {
     const bearer = authStore.token?.access_token
     if (!bearer) return
     const res = await $fetch(href, {
-      headers: {
-        Authorization: `Bearer ${bearer}`,
-        'Accept-Language': locale.value
-      }
+      headers: getRequestHeaders(locale.value)
     })
     modalContent.value = typeof res === 'object' ? JSON.stringify(res, null, 2) : res
     showModal.value = true
@@ -160,12 +158,14 @@ const deleteJob = async (row: any) => {
   try {
     const bearer = authStore.token?.access_token
     if (!bearer) return
-    await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${row.jobID}`, {
+
+    const jobUrl = await buildOgcApiUrl(`/jobs/${row.jobID}`, {
+      acceptLanguage: locale.value
+    })
+
+    await $fetch(jobUrl, {
       method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${bearer}`,
-        'Accept-Language': locale.value
-      }
+      headers: getRequestHeaders(locale.value)
     })
     Notify.create({
       message: t('Job deleted successfully'),

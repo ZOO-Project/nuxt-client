@@ -123,18 +123,17 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useRuntimeConfig } from '#imports'
 import { useI18n } from 'vue-i18n'
 import HelpDialog from '../components/help/HelpDialog.vue'
 import HomepageHelp from '../components/help/HomepageHelp.js'
 import MarkdownIt from 'markdown-it'
 
 const { locale, t } = useI18n()
+const { buildOgcApiUrl, getFetchOptions } = useOgcApiServer()
 
 const landingLinks = ref<any[]>([])
 const apiInfo = ref<any>(null)
 const loading = ref(false)
-const config = useRuntimeConfig()
 const helpVisible = ref(false)
 const helpContent = HomepageHelp
 
@@ -143,9 +142,6 @@ const md = new MarkdownIt({
   linkify: true,     
   typographer: true
 })
-
-const landingUrl = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/`
-const apiSpecUrl = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/api`
 
 const renderedDescription = computed(() => {
   if (!apiInfo.value?.description) return ''
@@ -156,14 +152,15 @@ const renderedDescription = computed(() => {
 const fetchLandingAndApiInfo = async () => {
   loading.value = true
   try {
-    const headers = {
-      'Accept-Language': locale.value
-    }
-    
-    const landingRes = await $fetch(landingUrl, { headers })
+    const fetchOptions = getFetchOptions(locale.value)
+
+    const landingUrl = await buildOgcApiUrl('/', { acceptLanguage: locale.value })
+    const apiSpecUrl = await buildOgcApiUrl('/api', { acceptLanguage: locale.value })
+
+    const landingRes = await $fetch<any>(landingUrl, fetchOptions)
     landingLinks.value = landingRes.links || []
 
-    const apiRes = await $fetch(apiSpecUrl, { headers })
+    const apiRes = await $fetch<any>(apiSpecUrl, fetchOptions)
     apiInfo.value = apiRes.info || {}
   } catch (err) {
     console.error('Error loading homepage data:', err)

@@ -54,7 +54,7 @@
 
 
             <div v-if="jobData.jobID" class="q-mt-md">
-                <a :href="`${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobData.jobID}/results`" target="_blank">
+                <a :href="jobResultsUrl" target="_blank">
                   {{t('View Full Result JSON')}}
                 </a>
             </div>
@@ -92,7 +92,6 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
 import { ref, onMounted, onBeforeUnmount, computed, nextTick, watch } from 'vue'
-import { useRuntimeConfig } from '#imports'
 import { useAuthStore } from '~/stores/auth'
 import { useI18n } from 'vue-i18n'
 
@@ -110,9 +109,9 @@ import Polygon from 'ol/geom/Polygon'
 import AppDialog from '~/components/modal/AppDialog.vue'
 
 const route = useRoute()
-const config = useRuntimeConfig()
 const authStore = useAuthStore()
 const { locale, t } = useI18n()
+const { buildOgcApiUrl, getRequestHeaders } = useOgcApiServer()
 
 
 const jobId = route.params.jobId
@@ -124,6 +123,7 @@ const modalContent = ref('')
 const showModal = ref(false)
 const geojsonData = ref(null)
 const mapInstance = ref<Map>()
+const jobResultsUrl = ref('')
 
 onMounted(() => {
   fetchJobDetails()
@@ -172,13 +172,17 @@ const fetchJobDetails = async () => {
   }
 
   try {
-    const response = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId}`, {
-      headers: {
-        Authorization: `Bearer ${bearer}`,
-        'Accept-Language': locale.value
-      },
+    const jobUrl = await buildOgcApiUrl(`/jobs/${jobId}`, {
+      acceptLanguage: locale.value
+    })
+
+    const response = await $fetch(jobUrl, {
+      headers: getRequestHeaders(locale.value),
     })
     jobData.value = response
+    jobResultsUrl.value = await buildOgcApiUrl(`/jobs/${response.jobID}/results`, {
+      acceptLanguage: locale.value
+    })
 
     if (response.status === 'succeeded' || response.status === 'failed') {
       clearInterval(intervalId)
@@ -231,10 +235,7 @@ const fetchLinkContent = async (href: string) => {
 
   try {
     const response = await $fetch(href, {
-      headers: {
-        Authorization: `Bearer ${bearer}`,
-        'Accept-Language': locale.value
-      },
+      headers: getRequestHeaders(locale.value),
     })
 
     for (const key in response) {

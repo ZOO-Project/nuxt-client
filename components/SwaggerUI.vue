@@ -10,10 +10,16 @@ import { useAuthStore } from '@/stores/auth';
 
 const authStore = useAuthStore();
 const config = useRuntimeConfig();
-const serverUrl = config.public.NUXT_ZOO_BASEURL + '/ogc-api';
+const { resolveOpenApiServerBase, getRequestHeaders } = useOgcApiServer();
 
-onMounted(() => {
-  console.log("serverUrl", serverUrl);
+onMounted(async () => {
+  // Resolve the OGC API server base from /ogc-api/api (servers[0].url),
+  // which is the per-user URL when authenticated.
+  const serverBase = await resolveOpenApiServerBase();
+  const fallback = `${config.public.NUXT_ZOO_BASEURL}/ogc-api`;
+  const serverUrl = (serverBase || fallback).replace(/\/+$/, '');
+  console.log('SwaggerUI serverUrl', serverUrl);
+
   SwaggerUI({
     dom_id: '#swagger-ui',
     url: serverUrl + '/api',
@@ -23,14 +29,11 @@ onMounted(() => {
     showCommonExtensions: true,
     requestInterceptor: (req) => {
       const paths = ['/api', '/me', '/jobs', '/processes', '/stac', '/raster'];
-      // if (req.url.startsWith(serverUrl) && paths.some(path => req.url.includes('/ogc-api' + path))) {
       if (paths.some(path => req.url.includes('/ogc-api' + path))) {
-        if (config.public.ZOO_OGCAPI_REQUIRES_BEARER_TOKEN === 'true') {
-          const token = authStore.token?.access_token;
-          if (!token) return;
-          if (token) {
-            req.headers.Authorization = `Bearer ${token}`;
-          }
+        // Add bearer token only when the user is authenticated.
+        const headers = getRequestHeaders();
+        if (config.public.ZOO_OGCAPI_REQUIRES_BEARER_TOKEN === 'true' && headers.Authorization) {
+          req.headers.Authorization = headers.Authorization;
         }
       }
       return req;

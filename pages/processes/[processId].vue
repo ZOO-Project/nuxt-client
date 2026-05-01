@@ -18,6 +18,7 @@ const {
 const authStore = useAuthStore()
 const { locale, t } = useI18n()
 const config = useRuntimeConfig()
+const { buildOgcApiUrl, getRequestHeaders } = useOgcApiServer()
  
 const data = ref(null)
 const inputValues = ref<Record<string, Array<{ mode: 'value' | 'href', value: string, href: string }>>>({})
@@ -287,11 +288,12 @@ const normalizeBboxSchema = (schema: any) => {
 
 const fetchData = async () => {
   try {
-    data.value = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${processId}`, {
-      headers: {
-        Authorization: `Bearer ${authStore.token?.access_token}`,
-        'Accept-Language': locale.value
-      }
+    const processUrl = await buildOgcApiUrl(`/processes/${processId}`, {
+      acceptLanguage: locale.value
+    })
+
+    data.value = await $fetch(processUrl, {
+      headers: getRequestHeaders(locale.value)
     })
  
     if (data.value && data.value.inputs) {
@@ -720,11 +722,10 @@ watch(
 )
  
 const pollJobStatus = async (jobId: string) => {
-  const jobUrl = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId}`
-  const headers = {
-    Authorization: `Bearer ${authStore.token?.access_token}`,
-    'Accept-Language': locale.value
-  }
+  const jobUrl = await buildOgcApiUrl(`/jobs/${jobId}`, {
+    acceptLanguage: locale.value
+  })
+  const headers = getRequestHeaders(locale.value)
  
   while (true) {
     try {
@@ -859,19 +860,19 @@ const submitProcess = async () => {
       submitting.value = true;
     }
  
-    const res = await $fetch(
-      `${config.public.NUXT_ZOO_BASEURL}/ogc-api/processes/${processId}/execution`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${authStore.token?.access_token}`,
-          "Content-Type": "application/json",
-          'Accept-Language': locale.value,
-          Prefer: preferMode.value+(preferMode.value=="respond-async"?";return=representation":""),
-        },
-        body: JSON.stringify(originalPayload),
-      }
-    );
+    const executionUrl = await buildOgcApiUrl(`/processes/${processId}/execution`, {
+      acceptLanguage: locale.value
+    })
+
+    const res = await $fetch(executionUrl, {
+      method: "POST",
+      headers: {
+        ...getRequestHeaders(locale.value),
+        "Content-Type": "application/json",
+        Prefer: preferMode.value + (preferMode.value == "respond-async" ? ";return=representation" : ""),
+      },
+      body: JSON.stringify(originalPayload),
+    });
  
    
     if (preferMode.value === "respond-async") {
@@ -1553,13 +1554,13 @@ async function cancelJob() {
   isCanceling.value = true
 
   try {
-    const url = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId.value}`
+    const url = await buildOgcApiUrl(`/jobs/${jobId.value}`, {
+      acceptLanguage: locale.value
+    })
     
     await $fetch(url, {
       method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${authStore.token?.access_token}`
-      }
+      headers: getRequestHeaders(locale.value)
     })
 
     jobStatus.value = 'canceled' 
@@ -1588,13 +1589,13 @@ const deleteJob = async () => {
   if (!jobId.value) return
   isCanceling.value = true
   try {
-    const url = `${config.public.NUXT_ZOO_BASEURL}/ogc-api/jobs/${jobId.value}`
+    const url = await buildOgcApiUrl(`/jobs/${jobId.value}`, {
+      acceptLanguage: locale.value
+    })
+
     await $fetch(url, {
       method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${authStore.token?.access_token}`,
-        'Accept-Language': locale.value
-      }
+      headers: getRequestHeaders(locale.value)
     })
     jobStatus.value = ''
     response.value = null

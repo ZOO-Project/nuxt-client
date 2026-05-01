@@ -30,28 +30,25 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRuntimeConfig } from '#imports'
-import { useAuthStore } from '~/stores/auth'
 import { useI18n } from 'vue-i18n'
 
 const conformanceLinks = ref([])
-const config = useRuntimeConfig()
-const authStore = useAuthStore()
 const { locale, t } = useI18n()
+const { buildOgcApiUrl, getRequestHeaders } = useOgcApiServer()
 
 
 onMounted(async () => {
   try {
-    const headers: Record<string, string> = {
-      'Accept-Language': locale.value
-    }
-    const bearer = authStore.token?.access_token
-    if (bearer) {
-      headers.Authorization = `Bearer ${bearer}`
-    }
-    const response = await fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/conformance`, {
+    const headers = getRequestHeaders(locale.value)
+    const conformanceUrl = await buildOgcApiUrl('/conformance', {
+      acceptLanguage: locale.value,
+      preferOpenApiServer: true
+    })
+
+    const response = await fetch(conformanceUrl, {
       headers
     })
+
     const data = await response.json()
     conformanceLinks.value = data.conformsTo || []
   } catch (error) {
