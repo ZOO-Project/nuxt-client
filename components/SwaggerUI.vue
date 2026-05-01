@@ -13,11 +13,19 @@ const config = useRuntimeConfig();
 const { resolveOpenApiServerBase, getRequestHeaders } = useOgcApiServer();
 
 onMounted(async () => {
-  // Resolve the OGC API server base from /ogc-api/api (servers[0].url),
-  // which is the per-user URL when authenticated.
-  const serverBase = await resolveOpenApiServerBase();
   const fallback = `${config.public.NUXT_ZOO_BASEURL}/ogc-api`;
-  const serverUrl = (serverBase || fallback).replace(/\/+$/, '');
+  let serverUrl;
+
+  if (config.public.ZOO_IAM_ENABLED === 'true') {
+    // IAM enabled: APISIX may protect the per-user server URL advertised
+    // in the OpenAPI spec. Use the static base URL only.
+    serverUrl = fallback.replace(/\/+$/, '');
+  } else {
+    // No IAM: resolve the OGC API server base from /ogc-api/api
+    // (servers[0].url), which is the per-user URL when authenticated.
+    const serverBase = await resolveOpenApiServerBase();
+    serverUrl = (serverBase || fallback).replace(/\/+$/, '');
+  }
   console.log('SwaggerUI serverUrl', serverUrl);
 
   SwaggerUI({
