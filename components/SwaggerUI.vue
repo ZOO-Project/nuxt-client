@@ -44,16 +44,23 @@ onMounted(async () => {
     const serverBase = await resolveOpenApiServerBase();
     serverUrl = (serverBase || fallback).replace(/\/+$/, '');
   }
-  console.log('SwaggerUI flags', {
-    iamFlagRaw,
-    iamEnabled,
-    requiresBearer,
-  });
+  console.log('SwaggerUI flags', { iamFlagRaw, iamEnabled, requiresBearer });
   console.log('SwaggerUI serverUrl', serverUrl);
+
+  // Fetch the OpenAPI spec ourselves so we can attach the bearer token —
+  // SwaggerUI's own fetch bypasses the requestInterceptor for this first call.
+  let spec;
+  try {
+    const specHeaders = getRequestHeaders();
+    console.log('SwaggerUI spec fetch headers', Object.keys(specHeaders));
+    spec = await $fetch(serverUrl + '/api', { headers: specHeaders });
+  } catch (err) {
+    console.error('SwaggerUI: failed to fetch spec', err);
+  }
 
   SwaggerUI({
     dom_id: '#swagger-ui',
-    url: serverUrl + '/api',
+    ...(spec ? { spec } : { url: serverUrl + '/api' }),
     presets: [SwaggerUI.presets.apis],
     deepLinking: true,
     showExtensions: true,
