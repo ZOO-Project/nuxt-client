@@ -89,10 +89,15 @@ onMounted(async () => {
           }
 
           if (typeof req.headers.set === 'function') {
+            if (typeof req.headers.delete === 'function') {
+              req.headers.delete('authorization');
+            }
             req.headers.set('Authorization', headers.Authorization);
           } else {
             req.headers.Authorization = headers.Authorization;
-            req.headers.authorization = headers.Authorization;
+            if ('authorization' in req.headers) {
+              delete req.headers.authorization;
+            }
           }
         }
       }
