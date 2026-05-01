@@ -66,12 +66,34 @@ onMounted(async () => {
     showExtensions: true,
     showCommonExtensions: true,
     requestInterceptor: (req) => {
-      const paths = ['/api', '/me', '/jobs', '/processes', '/stac', '/raster'];
-      if (paths.some(path => req.url.includes('/ogc-api' + path))) {
-        // Add bearer token only when the user is authenticated.
+      const protectedResources = ['api', 'me', 'jobs', 'processes', 'stac', 'raster'];
+
+      let pathname = '';
+      try {
+        pathname = new URL(req.url, serverUrl).pathname;
+      } catch {
+        pathname = '';
+      }
+
+      // Support both /ogc-api/<resource> and /<namespace>/ogc-api/<resource>.
+      const shouldAttachBearer = protectedResources.some((resource) => {
+        const pattern = new RegExp(`(?:^|/)ogc-api/${resource}(?:/|$)`);
+        return pattern.test(pathname);
+      });
+
+      if (shouldAttachBearer) {
         const headers = getRequestHeaders();
-        if (config.public.ZOO_OGCAPI_REQUIRES_BEARER_TOKEN === 'true' && headers.Authorization) {
-          req.headers.Authorization = headers.Authorization;
+        if (requiresBearer && headers.Authorization) {
+          if (!req.headers) {
+            req.headers = {};
+          }
+
+          if (typeof req.headers.set === 'function') {
+            req.headers.set('Authorization', headers.Authorization);
+          } else {
+            req.headers.Authorization = headers.Authorization;
+            req.headers.authorization = headers.Authorization;
+          }
         }
       }
       return req;
