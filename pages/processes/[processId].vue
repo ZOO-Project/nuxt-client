@@ -836,10 +836,29 @@ const submitProcess = async () => {
  
     let wsUrl = "";
     if (typeof window !== "undefined") {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      // Use wss or ws to access the WebSocket
-      const hostname = window.location.hostname.replace(/^webui\./, 'ws.');
-      wsUrl = `${protocol}//${hostname}/`;
+      const configuredWsUrl = String(config.public.NUXT_WS_URL || "").trim();
+
+      if (configuredWsUrl) {
+        // Accept ws://, wss:// and convert http(s):// for convenience.
+        if (configuredWsUrl.startsWith('ws://') || configuredWsUrl.startsWith('wss://')) {
+          wsUrl = configuredWsUrl;
+        } else if (configuredWsUrl.startsWith('http://')) {
+          wsUrl = `ws://${configuredWsUrl.slice('http://'.length)}`;
+        } else if (configuredWsUrl.startsWith('https://')) {
+          wsUrl = `wss://${configuredWsUrl.slice('https://'.length)}`;
+        } else {
+          wsUrl = configuredWsUrl;
+        }
+
+        if (!wsUrl.endsWith('/')) {
+          wsUrl += '/';
+        }
+      } else {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        // Use wss or ws to access the WebSocket
+        const hostname = window.location.hostname.replace(/^webui\./, 'ws.');
+        wsUrl = `${protocol}//${hostname}/`;
+      }
     }
  
   // subscriber URLs for async only
