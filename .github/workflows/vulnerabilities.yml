@@ -40,7 +40,7 @@ jobs:
       # Build Docker Image
       # =========================
       - name: Build Docker image
-        run: docker build -t nuxt-client:latest .
+        run: docker build -f Dockerfile.nuxt -t nuxt-client:latest .
 
       # =========================
       # Docker Image Scan
