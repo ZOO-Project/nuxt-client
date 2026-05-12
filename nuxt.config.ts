@@ -76,6 +76,8 @@ export default defineNuxtConfig({
             AUTH_ORIGIN: process.env.AUTH_ORIGIN,
             NEXTAUTH_URL: process.env.NEXTAUTH_URL,
             ZOO_OGCAPI_REQUIRES_BEARER_TOKEN: process.env.ZOO_OGCAPI_REQUIRES_BEARER_TOKEN,
+            ZOO_IAM_ENABLED: process.env.ZOO_IAM_ENABLED,
+            NUXT_WS_URL: process.env.NUXT_WS_URL,
             SUBSCRIBERURL: process.env.SUBSCRIBERURL,
         },
     }
