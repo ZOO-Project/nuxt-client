@@ -1,0 +1,65 @@
+name: Check vulnerabilities
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+  release:
+    types: [published]
+
+jobs:
+  vulnerabilities:
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: 0
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+
+      - name: Build Docker image
+        run: docker build -f Dockerfile.nuxt -t nuxt-client:latest .
+
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: nuxt-client:latest
+          format: table
+          exit-code: 0
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+
+      # Generate SARIF Report
+      - name: Run Trivy SARIF scan
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+
+
+      # Upload SARIF to GitHub
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
