@@ -87,7 +87,9 @@
           </q-card-section>
         </q-card>
 
-              <q-card v-if="landingLinks.length" class="q-pa-md q-mb-md">
+        <ConformanceBadges />
+
+        <q-card v-if="landingLinks.length" class="q-pa-md q-mb-md">
           <q-card-section>
             <div class="text-h6">{{ t('Available Links') }}</div>
 
@@ -127,9 +129,10 @@ import { useI18n } from 'vue-i18n'
 import HelpDialog from '../components/help/HelpDialog.vue'
 import HomepageHelp from '../components/help/HomepageHelp.js'
 import MarkdownIt from 'markdown-it'
+import ConformanceBadges from '~/components/common/ConformanceBadges.vue'
 
 const { locale, t } = useI18n()
-const { buildOgcApiUrl, getFetchOptions } = useOgcApiServer()
+const { buildOgcApiUrl, getFetchOptions, waitUntilReady } = useOgcApiServer()
 
 const landingLinks = ref<any[]>([])
 const apiInfo = ref<any>(null)
@@ -152,6 +155,7 @@ const renderedDescription = computed(() => {
 const fetchLandingAndApiInfo = async () => {
   loading.value = true
   try {
+    await waitUntilReady()
     const fetchOptions = getFetchOptions(locale.value)
 
     const landingUrl = await buildOgcApiUrl('/', { acceptLanguage: locale.value })

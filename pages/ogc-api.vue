@@ -1,46 +1,34 @@
 <template>
-
   <q-page class="q-pa-sm">
-    <div class="row justify-center ">
+    <div class="row justify-center">
       <div class="col-12 q-pa-md" style="max-width: 1080px;">
-        <p class="text-h3">OGC API</p>
-        <q-separator/>
-         <br />
-        <pre v-if="data">{{ formattedData }}</pre>
-        <q-spinner v-else />
+        <div class="text-h4 text-weight-bold q-mb-md">{{ t('Landing page') }}</div>
+        <q-banner v-if="error" dense rounded class="bg-red-1 text-negative q-mb-md">{{ error }}</q-banner>
+        <JsonBlock v-if="data" :value="data" max-height="70vh" />
+        <q-spinner v-else-if="!error" />
       </div>
     </div>
   </q-page>
-
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRuntimeConfig } from '#imports'
+import { onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import JsonBlock from '~/components/common/JsonBlock.vue'
+import { errorSummary } from '~/composables/utils/ogcError'
 
-const authStore = useAuthStore()
-const config = useRuntimeConfig()
-const data = ref(null)
+const { t, locale } = useI18n()
+const { apiFetch, waitUntilReady } = useOgcApiServer()
+const data = ref<any>(null)
+const error = ref('')
 
-const fetchData = async () => {
-  const bearer = authStore.token?.access_token
-  if (!bearer) return
+onMounted(async () => {
   try {
-    data.value = await $fetch(`${config.public.NUXT_ZOO_BASEURL}/ogc-api/`, {
-      headers: {
-        Authorization: `Bearer ${bearer}`
-      }
-    })
-  } catch (error) {
-    console.error('Error fetching data:', error)
+    await waitUntilReady()
+    // No `f=json` here: the kernel answers 400 to it on the landing route (the other routes accept it).
+    data.value = await apiFetch('/', { acceptLanguage: locale.value })
+  } catch (err) {
+    error.value = errorSummary(err, t('Request failed'))
   }
-}
-
-onMounted(() => {
-  fetchData()
-})
-
-const formattedData = computed(() => {
-  return JSON.stringify(data.value, null, 2)
 })
 </script>

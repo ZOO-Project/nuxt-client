@@ -1,5 +1,6 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
 import {defineQuasarConfig} from './quasar.config'
+import { fileURLToPath } from 'node:url'
 
 export default defineNuxtConfig({
     app: {
@@ -32,13 +33,40 @@ export default defineNuxtConfig({
     vue: {
         compilerOptions: {}
     },
+    vite: {
+        optimizeDeps: {
+            // CommonJS libraries behind the workflow graph (components/common/CwlGraph.vue)
+            include: [
+                'cwl-svg/src/graph/workflow',
+                'cwl-svg/src/plugins/arrange/arrange',
+                'cwl-svg/src/plugins/edge-hover/edge-hover',
+                'cwl-svg/src/plugins/node-move/node-move',
+                'cwl-svg/src/plugins/selection/selection',
+                'cwl-svg/src/plugins/zoom/zoom',
+                'cwl-svg/src/utils/svg-dumper',
+                'cwlts/models'
+            ]
+        }
+    },
     modules: ["@pinia/nuxt", "nuxt-quasar-ui", "@sidebase/nuxt-auth","@nuxtjs/i18n"],
+
+    nitro: {
+        // @sidebase/nuxt-auth 0.9 imports `next-auth/core`, no longer exported by next-auth 4.22+:
+        // see server/shims/next-auth-core.mjs. The core files must be traced into the server
+        // bundle's node_modules since nothing else in the bundle references them.
+        alias: {
+            'next-auth/core': fileURLToPath(new URL('./server/shims/next-auth-core.mjs', import.meta.url)),
+        },
+        externals: {
+            traceInclude: [fileURLToPath(new URL('./node_modules/next-auth/core/index.js', import.meta.url))],
+        },
+    },
 
     i18n: {
         langDir: 'locales',
         locales: [
           { code: 'en-US', iso: 'en-US', file: 'en.json', name: 'English' },
-          { code: 'fr-FR', iso: 'fr-FR', file: 'fr.json', name: 'Française' }
+          { code: 'fr-FR', iso: 'fr-FR', file: 'fr.json', name: 'Français' }
         ],
         defaultLocale: 'en-US',
         lazy: true,

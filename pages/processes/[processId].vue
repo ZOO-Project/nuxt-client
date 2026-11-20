@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { useHead } from '#imports'
-import { ref, onMounted, watch, reactive, nextTick } from 'vue'
+import { ref, onMounted, watch, reactive, nextTick, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { useRuntimeConfig } from '#imports'
 import { triggerRef } from 'vue'
-import { uuid } from 'vue-uuid';
 import { useQuasar } from 'quasar'
 import HelpDialog from '@/components/help/HelpDialog.vue'
 import processIdHelp from '@/components/help/processIdHelp.js'
+import { copyToClipboard } from 'quasar'
+import { normalizeStatus, isTerminalStatus } from '~/composables/utils/jobs'
+import { errorSummary } from '~/composables/utils/ogcError'
+import { randomId } from '~/composables/utils/ids'
  
  
 const {
@@ -18,7 +21,7 @@ const {
 const authStore = useAuthStore()
 const { locale, t } = useI18n()
 const config = useRuntimeConfig()
-const { buildOgcApiUrl, getRequestHeaders } = useOgcApiServer()
+const { buildOgcApiUrl, getRequestHeaders, apiFetch } = useOgcApiServer()
  
 const data = ref(null)
 const inputValues = ref<Record<string, Array<{ mode: 'value' | 'href', value: string, href: string }>>>({})
@@ -28,6 +31,13 @@ const loading = ref(false)
 const submitting = ref(false);
 const jobStatus = ref('')
 const preferMode = ref<'respond-async' | 'respond-sync'>('respond-async')
+const executionModeOptions = computed(() => {
+  const jco: string[] = data.value?.jobControlOptions || ['sync-execute', 'async-execute']
+  const options = []
+  if (jco.includes('async-execute') || !jco.length) options.push({ label: t('Asynchronous (job)'), value: 'respond-async' })
+  if (jco.includes('sync-execute') || !jco.length) options.push({ label: t('Synchronous (wait for the result)'), value: 'respond-sync' })
+  return options.length ? options : [{ label: 'respond-async', value: 'respond-async' }, { label: 'respond-sync', value: 'respond-sync' }]
+})
 const jsonRequestPreview = ref('')
 const showDialog = ref(false)
 const requiredInputs = ref<string[]>([])
@@ -36,7 +46,7 @@ const validationErrors = ref<Record<string, boolean>>({})
 const progressPercent = ref(0)
 const progressMessage = ref('')
 const jobId = ref("");
-const channelId = ref(uuid.v1());
+const channelId = ref(randomId());
 const $q = useQuasar()
 let ws: WebSocket | null = null
 const helpVisible = ref(false)
@@ -49,6 +59,17 @@ let drawnFeature: L.Layer | null = null
 const enabledInputs = reactive<Record<string, boolean>>({})
 const isCanceling = ref(false)
 const jobCanceled = ref(false)
+const loadError = ref('')
+const requestUrl = useRequestURL()
+// Which outputs are requested (all by default). Outputs named like a disabled
+// optional input are left out, unless the user decided otherwise.
+const outputEnabled = reactive<Record<string, boolean>>({})
+const outputTouched = reactive<Record<string, boolean>>({})
+// Bumped to stop a running polling loop (dismiss, delete, new submission).
+let pollingToken = 0
+const stopPolling = () => {
+  pollingToken += 1
+}
  
  
 // Helper to extract a default bbox from various schema styles (old & new)
@@ -288,13 +309,13 @@ const normalizeBboxSchema = (schema: any) => {
 
 const fetchData = async () => {
   try {
-    const processUrl = await buildOgcApiUrl(`/processes/${processId}`, {
-      acceptLanguage: locale.value
-    })
+    data.value = await apiFetch(`/processes/${processId}`, { query: { f: 'json' }, acceptLanguage: locale.value })
 
-    data.value = await $fetch(processUrl, {
-      headers: getRequestHeaders(locale.value)
-    })
+    // Default execution mode follows what the process supports.
+    const jco: string[] = data.value?.jobControlOptions || []
+    if (jco.length && !jco.includes('async-execute') && jco.includes('sync-execute')) {
+      preferMode.value = 'respond-sync'
+    }
  
     if (data.value && data.value.inputs) {
       for (const [key, input] of Object.entries(data.value.inputs)) {
@@ -429,6 +450,10 @@ const fetchData = async () => {
  
     // Outputs initialization
     if (data.value && data.value.outputs) {
+      for (const key of Object.keys(data.value.outputs)) {
+        outputEnabled[key] = !(key in enabledInputs) || enabledInputs[key] !== false
+        delete outputTouched[key]
+      }
       for (const [key, input] of Object.entries(data.value.outputs)) {
         if (input.schema.oneOf?.length > 0) {
           const myEnum = []
@@ -451,6 +476,7 @@ const fetchData = async () => {
     }
   } catch (error) {
     console.error('Error fetching data:', error)
+    loadError.value = errorSummary(error, t('Request failed'))
   }
 }
  
@@ -514,7 +540,7 @@ watch(
       "softwareVersion": val.version || null,
       "keywords": val.keywords || [],
       "identifier": processId,
-      "url": `http://localhost:3058/processes/${processId}`,
+      "url": `${requestUrl.origin}/processes/${processId}`,
 
       // New metadata mapping
       "author": authors,
@@ -617,6 +643,7 @@ const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
   const result: Record<string, any> = {}
 
   for (const [key, outputArray] of Object.entries(outputs)) {
+    if (outputEnabled[key] === false) continue
     if (outputArray && outputArray.length > 0) {
       const outputConfig: any = {}
 
@@ -636,15 +663,23 @@ const convertOutputsToPayload = (outputs: Record<string, any[]>) => {
   }
   return result
 }
- 
+
+// Mirror the "Enable" choice of an optional input onto the output of the same
+// name (echo-like services), until the user picks the outputs by hand.
+watch(enabledInputs, (enabled) => {
+  for (const [key, on] of Object.entries(enabled)) {
+    if (key in outputEnabled && !outputTouched[key]) outputEnabled[key] = on
+  }
+})
+
 watch(
-  [inputValues, outputValues, subscriberValues],
+  [inputValues, outputValues, subscriberValues, enabledInputs, outputEnabled],
   ([newInputs, newOutputs, newSubscribers]) => {
-    console.log('Outputs changed:', newOutputs)
- 
     const formattedInputs: Record<string, any> = {}
- 
+
     for (const [key, val] of Object.entries(newInputs)) {
+      // Optional inputs that are not enabled must not be sent at all.
+      if (enabledInputs[key] === false) continue
       if (
         val === undefined ||
         val === '' ||
@@ -702,7 +737,12 @@ watch(
           }
         }
       } else {
-        formattedInputs[key] = val
+        // Literal inputs: the number widget emits strings, the request wants JSON numbers
+        const type = data.value.inputs[key]?.schema?.type
+        formattedInputs[key] =
+          (type === 'number' || type === 'integer') && typeof val === 'string' && val.trim() !== '' && !Number.isNaN(Number(val))
+            ? Number(val)
+            : val
       }
     }
  
@@ -721,35 +761,44 @@ watch(
   { deep: true }
 )
  
-const pollJobStatus = async (jobId: string) => {
-  const jobUrl = await buildOgcApiUrl(`/jobs/${jobId}`, {
-    acceptLanguage: locale.value
-  })
-  const headers = getRequestHeaders(locale.value)
- 
-  while (true) {
-    try {
-      const job = await $fetch(jobUrl, { headers })
-      jobStatus.value = job.status
+const pollJobStatus = async (id: string) => {
+  const token = ++pollingToken
 
-      // Stop polling when job is finished or canceled
-      if (['successful', 'failed', 'canceled'].includes(job.status)) {
-        if (job.status === 'successful') {
+  while (token === pollingToken) {
+    try {
+      // apiFetch handles the bearer token, expired sessions and the loading bar.
+      const job = await apiFetch(`/jobs/${id}`, { acceptLanguage: locale.value })
+      if (token !== pollingToken) break
+      const status = normalizeStatus(job.status)
+      jobStatus.value = status
+      if (job.progress !== undefined) progressPercent.value = job.progress
+      if (job.message) progressMessage.value = job.message
+
+      // Stop polling when job is finished or dismissed
+      if (isTerminalStatus(status)) {
+        if (status === 'successful') {
+          progressPercent.value = 100
           response.value = job
-        } else if (job.status === 'failed') {
-          response.value = { error: 'Job failed', details: job }
-        } else if (job.status === 'canceled') {
-          response.value = { info: 'Job was canceled', details: job }
+        } else if (status === 'failed') {
+          response.value = { error: job.message ? `${t('Job failed')}: ${job.message}` : t('Job failed'), details: job }
+        } else {
+          response.value = { info: t('Job was dismissed'), details: job }
         }
 
         loading.value = false
+        stopJobTracking()
         break
       }
 
       // Poll every 2 seconds
       await new Promise(resolve => setTimeout(resolve, 2000))
-    } catch (err) {
-      console.error('Polling error:', err)
+    } catch (err: any) {
+      if (token !== pollingToken) break
+      if (err?.status === 404 || err?.statusCode === 404) {
+        jobStatus.value = 'dismissed'
+      } else {
+        console.error('Polling error:', err)
+      }
       loading.value = false
       break
     }
@@ -823,16 +872,19 @@ const submitProcess = async () => {
   if (!validateRequiredInputs()) {
     $q.notify({
       type: "negative",
-      message: "Please fill all required inputs before submitting.",
+      message: t('Please fill all required inputs before submitting.'),
     });
     return;
   }
- 
- 
+
+
+  stopPolling();
+  stopJobTracking();
+  jobId.value = "";
   response.value = null;
   jobStatus.value = "submitted";
   progressPercent.value = 0;
-  progressMessage.value = "Submitting job...";
+  progressMessage.value = t('Submitting job...');
  
     let wsUrl = "";
     if (typeof window !== "undefined") {
@@ -872,23 +924,30 @@ const submitProcess = async () => {
     const originalPayload = JSON.parse(jsonRequestPreview.value || "{}");
 
     if (preferMode.value === "respond-async") {
-      originalPayload.executionOptions = originalPayload.executionOptions ?? {};
-      originalPayload.executionOptions.subscriber = { ...subscribers };
+      // Only the standard OGC API - Processes `subscriber` block: sending it a
+      // second time under `executionOptions` leaves ZOO jobs stuck in "running".
+      originalPayload.subscriber = { ...subscribers };
+      delete originalPayload.executionOptions;
       loading.value = true;
-    }else{
+    } else {
+      // Synchronous run: no notifications, and ask for a JSON document so that
+      // several outputs do not come back as a multipart/related body.
+      delete originalPayload.subscriber;
+      delete originalPayload.executionOptions;
+      originalPayload.response = "document";
       submitting.value = true;
     }
  
-    const executionUrl = await buildOgcApiUrl(`/processes/${processId}/execution`, {
-      acceptLanguage: locale.value
-    })
-
-    const res = await $fetch(executionUrl, {
+    const res = await apiFetch(`/processes/${processId}/execution`, {
       method: "POST",
+      acceptLanguage: locale.value,
       headers: {
-        ...getRequestHeaders(locale.value),
         "Content-Type": "application/json",
-        Prefer: preferMode.value + (preferMode.value == "respond-async" ? ";return=representation" : ""),
+        // No `return=representation` on asynchronous runs: asking ZOO-Project for
+        // the full response document (this preference or `response: document`)
+        // makes its worker crash after a CWL job succeeds, leaving the job in
+        // "running" forever; the job status is polled anyway.
+        Prefer: preferMode.value,
       },
       body: JSON.stringify(originalPayload),
     });
@@ -900,104 +959,112 @@ const submitProcess = async () => {
       }
  
       jobId.value = res.jobID;
-      console.log("Job submitted (server jobID):", res.jobID);
 
-      // Start polling in parallel to WS
+      // Polling is the source of truth; the WebSocket only speeds progress up.
       pollJobStatus(res.jobID);
 
-      // WebSocket connection (optional real-time updates)
-      ws = new WebSocket(wsUrl);
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (wsErr) {
+        console.warn("WebSocket unavailable, polling only", wsErr);
+        ws = null;
+      }
 
-      ws.onopen = () => {
-        console.log("WebSocket connected — subscribing to", "JOBSOCKET-" + channelId.value);
-        ws.send("SUB JOBSOCKET-" + channelId.value);
-      };
- 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          console.log(" WS message:", msg);
- 
-          const msgJobId = msg.jobid ?? msg.jobID ?? null;
-          const msgId = msg.id ?? null;
- 
-          if (msgJobId !== "JOBSOCKET-" + channelId.value && msgId !== jobId.value) {
-            if (event.data != "1") {
+      if (ws) {
+        ws.onopen = () => {
+          ws?.send("SUB JOBSOCKET-" + channelId.value);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (!msg || typeof msg !== "object") return; // "1" acknowledges the subscription
+
+            const msgJobId = msg.jobid ?? msg.jobID ?? null;
+            const msgId = msg.id ?? null;
+            // Messages about other jobs on the shared channel are ignored.
+            if (msgJobId !== "JOBSOCKET-" + channelId.value && msgId !== jobId.value) return;
+
+            if (msg.progress !== undefined) progressPercent.value = msg.progress;
+            if (msg.message) progressMessage.value = msg.message;
+
+            if (msg.status === "succeeded" || msg.type === "success") {
               progressPercent.value = 100;
-              progressMessage.value = "Completed successfully";
-              response.value = JSON.parse(event.data);
-              loading.value = false;
-              ws?.close();
-            } else {
-              console.log("Ignored WS message, not for this job:", msgJobId, msgId);
+              progressMessage.value = t('Completed successfully');
+              stopJobTracking();
+            } else if (msg.status === "failed" || msg.type === "failed") {
+              progressMessage.value = t('Execution failed');
+              stopJobTracking();
+            } else if (!isTerminalStatus(jobStatus.value)) {
+              jobStatus.value = "running";
             }
-            return;
+          } catch (e) {
+            console.error("Invalid WS message:", event.data, e);
           }
+        };
 
-          if (jobStatus.value === "canceled") {
-            loading.value = false;
-            ws?.close();
-          }
- 
-          // handle progress
-          if (msg.progress !== undefined) progressPercent.value = msg.progress;
-          if (msg.message) progressMessage.value = msg.message;
- 
- 
-          if (msg.status === "succeeded" || msg.type === "success") {
-            progressPercent.value = 100;
-            progressMessage.value = "Completed successfully";
-            jobStatus.value = "successful";
-            response.value = msg;
-            loading.value = false;
-            ws?.close();
-          } else if (msg.status === "failed" || msg.type === "failed") {
-            progressMessage.value = "Execution failed";
-            jobStatus.value = "failed";
-            response.value = { error: "Job failed", details: msg };
-            loading.value = false;
-            ws?.close();
-          } else {
-            jobStatus.value = "running...";
-          }
-        } catch (e) {
-          console.error("Invalid WS message:", event.data, e);
-        }
-      };
- 
-      ws.onerror = (err) => {
-        console.error("WebSocket error", err);
-        progressMessage.value = "WebSocket error";
-      };
- 
+        ws.onerror = () => {
+          // Progress keeps coming through polling.
+          console.warn("WebSocket error: falling back to polling only");
+        };
+      }
+
     } else {
-      // Sync execution
-      console.log("Sync execution result:", res);
-
-      if (res.error) {
-        console.error("Sync execution error:", res.error);
-        progressMessage.value = res.error.description || "Execution failed";
+      // Synchronous execution: the body is the results document.
+      if (res && typeof res === "object" && res.error) {
+        progressMessage.value = res.error.description || t('Execution failed');
         jobStatus.value = "failed";
         response.value = res;
       } else {
         progressPercent.value = 100;
-        progressMessage.value = "Completed successfully (sync)";
+        progressMessage.value = t('Completed successfully');
         jobStatus.value = "successful";
         response.value = res;
       }
- 
- 
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error("Execution error (POST):", error);
-    $q.notify({ type: "negative", message: "Process execution failed." });
+    const raw = errorSummary(error, t('Process execution failed.'));
+    const networkFailure = !error?.status && /Failed to fetch|NetworkError|<no response>|Load failed/i.test(String(raw));
+    const detail = networkFailure
+      ? t('Network error: the server could not be reached (CORS or connection problem).')
+      : raw;
+    $q.notify({ type: "negative", message: detail, timeout: 10000 });
     jobStatus.value = "failed";
-    progressMessage.value = "Execution failed";
+    progressMessage.value = detail;
+    response.value = { error: detail };
     loading.value = false;
   } finally {
     submitting.value = false;
   }
 };
+
+// "Copy as curl" for the execute request shown in the preview dialog.
+const copyAsCurl = async () => {
+  try {
+    const executionUrl = await buildOgcApiUrl(`/processes/${processId}/execution`, { acceptLanguage: locale.value })
+    const headers = getRequestHeaders(locale.value)
+    const parts = [`curl -X POST '${executionUrl}'`, `-H 'Content-Type: application/json'`, `-H 'Prefer: ${preferMode.value}'`]
+    if (headers.Authorization) parts.push(`-H 'Authorization: ${headers.Authorization}'`)
+    // The subscriber block only serves the UI's own WebSocket notifications
+    // (cluster-internal URLs): leave it out of a command meant to be run elsewhere.
+    let body = jsonRequestPreview.value || '{}'
+    try {
+      const parsed = JSON.parse(body)
+      if (parsed && typeof parsed === 'object') {
+        delete parsed.subscriber
+        body = JSON.stringify(parsed, null, 2)
+      }
+    } catch {
+      /* keep the preview text as is */
+    }
+    parts.push(`-d '${body.replace(/'/g, "'\\''")}'`)
+    await copyToClipboard(parts.join(' \\\n  '))
+    $q.notify({ type: 'positive', message: t('curl command copied') })
+  } catch (err) {
+    $q.notify({ type: 'negative', message: t('Copy failed') })
+  }
+}
 
  
  
@@ -1573,31 +1640,26 @@ async function cancelJob() {
   isCanceling.value = true
 
   try {
-    const url = await buildOgcApiUrl(`/jobs/${jobId.value}`, {
-      acceptLanguage: locale.value
-    })
-    
-    await $fetch(url, {
-      method: 'DELETE',
-      headers: getRequestHeaders(locale.value)
-    })
+    stopPolling()
+    await apiFetch(`/jobs/${jobId.value}`, { method: 'DELETE', acceptLanguage: locale.value })
 
-    jobStatus.value = 'canceled' 
+    jobStatus.value = 'dismissed'
     loading.value = false
     submitting.value = false
+    response.value = null
 
-    stopJobTracking()              
+    stopJobTracking()
     $q.notify({
       type: 'positive',
-      message: 'Execution canceled'
+      message: t('Execution dismissed')
     })
-
-    // DO NOT null jobId.value here so user can still delete the job if needed
+    // The server removes dismissed jobs: nothing left to delete.
+    jobId.value = ''
   } catch (err) {
     console.error(err)
     $q.notify({
       type: 'negative',
-      message: 'Failed to cancel job'
+      message: errorSummary(err, t('Failed to cancel job'))
     })
   } finally {
     isCanceling.value = false
@@ -1608,21 +1670,15 @@ const deleteJob = async () => {
   if (!jobId.value) return
   isCanceling.value = true
   try {
-    const url = await buildOgcApiUrl(`/jobs/${jobId.value}`, {
-      acceptLanguage: locale.value
-    })
-
-    await $fetch(url, {
-      method: 'DELETE',
-      headers: getRequestHeaders(locale.value)
-    })
+    stopPolling()
+    await apiFetch(`/jobs/${jobId.value}`, { method: 'DELETE', acceptLanguage: locale.value })
     jobStatus.value = ''
     response.value = null
-    jobId.value = null
-    $q.notify({ type: 'positive', message: 'Job deleted successfully' })
+    jobId.value = ''
+    $q.notify({ type: 'positive', message: t('Job deleted successfully') })
   } catch (err) {
     console.error(err)
-    $q.notify({ type: 'negative', message: 'Delete Failed' })
+    $q.notify({ type: 'negative', message: errorSummary(err, t('Failed to delete job')) })
   } finally {
     isCanceling.value = false
   }
@@ -1904,7 +1960,7 @@ function getFormatAndRef(input) {
               <q-checkbox
                 v-if="input.minOccurs === 0"
                 v-model="enabledInputs[inputId]"
-                :label="`Enable`"
+                :label="t('Enable')"
                 dense
               />
             </div>
@@ -1932,8 +1988,8 @@ function getFormatAndRef(input) {
                     <q-option-group
                       v-model="item.mode"
                       :options="[
-                        { label: 'Provide URL (href)', value: 'href' },
-                        { label: 'Provide Value Inline', value: 'value' }
+                        { label: t('Provide URL (href)'), value: 'href' },
+                        { label: t('Provide Value Inline'), value: 'value' }
                       ]"
                       type="radio"
                       inline
@@ -1962,13 +2018,13 @@ function getFormatAndRef(input) {
                       <q-select
                         v-model="item.format"
                         :options="item.availableFormats"
-                        label="Content Format"
+                        :label="t('Content Format')"
                         dense
                         filled
                       />
                       <q-input
                         v-model="item.value"
-                        label="Input Value"
+                        :label="t('Input Value')"
                         type="textarea"
                         autogrow
                         filled
@@ -2010,8 +2066,8 @@ function getFormatAndRef(input) {
                   <q-option-group
                     v-model="inputValues[inputId].mode"
                     :options="[
-                      { label: 'Provide URL (href)', value: 'href' },
-                      { label: 'Provide Value Inline', value: 'value' }
+                      { label: t('Provide URL (href)'), value: 'href' },
+                      { label: t('Provide Value Inline'), value: 'value' }
                     ]"
                     type="radio"
                     inline
@@ -2036,13 +2092,13 @@ function getFormatAndRef(input) {
                     <q-select
                       v-model="inputValues[inputId].format"
                       :options="inputValues[inputId].availableFormats"
-                      label="Content Format"
+                      :label="t('Content Format')"
                       dense
                       filled
                     />
                     <q-input
                       v-model="inputValues[inputId].value"
-                      label="Input Value"
+                      :label="t('Input Value')"
                       type="textarea"
                       autogrow
                       filled
@@ -2097,7 +2153,7 @@ function getFormatAndRef(input) {
                   <q-select
                     v-model="inputValues[inputId].crs"
                     :options="['EPSG:4326', 'EPSG:3857', 'EPSG:32611']"
-                    label="CRS / EPSG"
+                    :label="t('CRS / EPSG')"
                     filled
                     dense
                     emit-value
@@ -2231,13 +2287,19 @@ function getFormatAndRef(input) {
               <div class="row items-center q-mb-sm">
                 <div class="text-blue text-bold">{{ outputId.toUpperCase() }}</div>
                 <q-space />
+                <q-checkbox
+                  v-model="outputEnabled[outputId]"
+                  dense
+                  :label="t('Request this output')"
+                  @update:model-value="outputTouched[outputId] = true"
+                />
               </div>
               <q-select
                 filled
                 v-if="outputValues[outputId].length > 1"
                 v-model="outputValues[outputId][1].cval"
                 :options="outputValues[outputId][1].enum"
-                label="Format"
+                :label="t('Format')"
                 dense
                 class="q-ml-sm"
                 style="flex: 1"
@@ -2251,7 +2313,7 @@ function getFormatAndRef(input) {
                 v-if="outputValues[outputId].length > 0"
                 v-model="outputValues[outputId][0].cval"
                 :options="outputValues[outputId][0].enum"
-                label="Transmission"
+                :label="t('Transmission')"
                 dense
                 class="q-ml-sm"
                 style="flex: 1"
@@ -2264,10 +2326,10 @@ function getFormatAndRef(input) {
         <div class="q-mb-md">
           <q-card class="q-pa-md">
             <div class="row items-center q-mb-sm">
-              <div class="text-blue text-bold">NOTIFICATION ENDPOINTS</div>
+              <div class="text-blue text-bold">{{ t('Notification endpoints') }}</div>
               <q-space />
               <q-icon name="info" color="grey-6" size="sm">
-                <q-tooltip>URLs to receive status notifications</q-tooltip>
+                <q-tooltip>{{ t('URLs to receive status notifications') }}</q-tooltip>
               </q-icon>
             </div>
  
@@ -2275,12 +2337,12 @@ function getFormatAndRef(input) {
               <!-- Success URI -->
               <div class="q-gutter-sm row items-center">
                 <q-badge color="green" text-color="white">
-                  Success
+                  {{ t('Success') }}
                 </q-badge>
                 <q-input
                   filled
                   v-model="subscriberValues.successUri"
-                  label="Success URI"
+                  :label="t('Success URI')"
                   placeholder="URL called in case of success"
                   dense
                   @change="subscriberValues.successUri = $event.target.value"
@@ -2296,12 +2358,12 @@ function getFormatAndRef(input) {
               <!-- In Progress URI -->
               <div class="q-gutter-sm row items-center">
                 <q-badge color="orange" text-color="white">
-                  Progress
+                  {{ t('Progress') }}
                 </q-badge>
                 <q-input
                   filled
                   v-model="subscriberValues.inProgressUri"
-                  label="In Progress URI"
+                  :label="t('In Progress URI')"
                   placeholder="URL called during execution"
                   @change="subscriberValues.inProgressUri = $event.target.value"
                   dense
@@ -2317,12 +2379,12 @@ function getFormatAndRef(input) {
               <!-- Failed URI -->
               <div class="q-gutter-sm row items-center">
                 <q-badge color="red" text-color="white">
-                  Failed
+                  {{ t('Failed') }}
                 </q-badge>
                 <q-input
                   filled
                   v-model="subscriberValues.failedUri"
-                  label="Failed URI"
+                  :label="t('Failed URI')"
                   placeholder="URL called in case of failure"
                   @change="subscriberValues.failedUri = $event.target.value"
                   dense
@@ -2339,24 +2401,35 @@ function getFormatAndRef(input) {
         </div>
           <q-select
             v-model="preferMode"
-            :options="['respond-async', 'respond-sync']"
-            label="Execution Mode"
+            :options="executionModeOptions"
+            emit-value
+            map-options
+            :label="t('Execution Mode')"
             filled
             dense
             class="q-mb-md"
           />
-        <div class="q-mt-md row q-gutter-sm">
+        <div class="q-mt-md row q-gutter-sm items-center">
           <q-btn
-            label="Submit"
+            :label="t('Execute')"
+            icon="play_arrow"
             type="submit"
             color="primary"
             :loading="loading || submitting"
-            :disable="jobStatus === 'running' || jobStatus === 'submitted'"
+            :disable="jobStatus === 'running' || jobStatus === 'submitted' || jobStatus === 'accepted'"
           />
-          <q-btn color="primary" outline label="Show JSON Preview" @click="showDialog = true" />
+          <q-btn color="primary" outline :label="t('Show JSON Preview')" @click="showDialog = true" />
+          <q-btn
+            v-if="jobId"
+            color="secondary"
+            text-color="primary"
+            icon="work"
+            :label="t('Open the job page')"
+            :to="`/jobs/${jobId}`"
+          />
           <!-- Cancel while job is running / submitted -->
           <div
-            v-if="jobStatus === 'submitted' || jobStatus === 'running'"
+            v-if="jobId && (jobStatus === 'submitted' || jobStatus === 'accepted' || jobStatus === 'running')"
             class="q-mt-md"
           >
             <q-btn
@@ -2364,13 +2437,13 @@ function getFormatAndRef(input) {
               icon="cancel"
               :loading="isCanceling"
               @click="cancelJob"
-              :label="isCanceling ? 'Canceling…' : 'Cancel Job'"
+              :label="isCanceling ? t('Canceling…') : t('Dismiss job')"
             />
           </div>
 
           <!-- Delete after job finished -->
           <div
-            v-else-if="jobStatus === 'successful' || jobStatus === 'failed'"
+            v-else-if="jobId && (jobStatus === 'successful' || jobStatus === 'failed')"
             class="q-mt-md"
           >
             <q-btn
@@ -2379,7 +2452,7 @@ function getFormatAndRef(input) {
               icon="delete"
               :loading="isCanceling"
               @click="deleteJob"
-              :label="isCanceling ? 'Deleting…' : 'Delete Job'"
+              :label="isCanceling ? t('Deleting…') : t('Delete job')"
             />
           </div> 
         </div>
@@ -2387,13 +2460,15 @@ function getFormatAndRef(input) {
  
       <q-dialog v-model="showDialog" persistent>
         <q-card style="min-width: 70vw; max-width: 90vw;">
-          <q-card-section>
-            <div class="text-h6">Execute Request Confirmation</div>
+          <q-card-section class="row items-center">
+            <div class="text-h6">{{ t('Execute Request Confirmation') }}</div>
+            <q-space />
+            <q-btn flat dense icon="terminal" :label="t('Copy as curl')" @click="copyAsCurl" />
           </q-card-section>
  
           <q-card-section class="q-pt-none">
             <q-banner dense class="bg-grey-2 text-black q-pa-sm">
-              This is the full request that will be sent to the Execute endpoint:
+              {{ t('This is the full request that will be sent to the Execute endpoint:') }}
             </q-banner>
             <q-input
               v-model="jsonRequestPreview"
@@ -2408,9 +2483,9 @@ function getFormatAndRef(input) {
           </q-card-section>
  
           <q-card-actions align="right">
-            <q-btn flat label="Cancel" color="primary" v-close-popup />
+            <q-btn flat :label="t('Cancel')" color="primary" v-close-popup />
             <q-btn
-              label="Submit Request"
+              :label="t('Submit Request')"
               color="primary"
               :loading="loading || submitting"
               :disable="loading || submitting"
@@ -2421,7 +2496,7 @@ function getFormatAndRef(input) {
       </q-dialog>
  
       <div v-if="submitting" class="text-caption text-primary q-mt-sm">
-        Submitting...
+        {{ t('Submitting...') }}
       </div>
  
       <div class="q-mt-md" v-if="loading">
@@ -2436,7 +2511,7 @@ function getFormatAndRef(input) {
         <div class="row items-center justify-between q-mt-xs">
           <div class="text-caption text-primary">
             <span v-if="progressMessage">{{ progressMessage }}</span>
-            <span v-else>Status: {{ jobStatus }}</span>
+            <span v-else>{{ t('Status') }}: {{ jobStatus }}</span>
           </div>
  
          
@@ -2447,15 +2522,53 @@ function getFormatAndRef(input) {
       </div>
 
       <div class="q-mt-lg" v-if="response">
-        <h6>Execution Response</h6>
-        <details>
-          <summary class="text-primary text-bold cursor-pointer">Show Raw JSON</summary>
-          <pre>{{ JSON.stringify(response, null, 2) }}</pre>
+        <div class="row items-center q-mb-sm">
+          <div class="text-h6 q-my-none">{{ t('Execution Response') }}</div>
+          <q-space />
+          <q-btn
+            v-if="jobId"
+            flat
+            dense
+            color="primary"
+            icon="work"
+            :label="t('Open the job page')"
+            :to="`/jobs/${jobId}`"
+          />
+        </div>
+        <q-banner v-if="response.error" dense rounded class="bg-red-1 text-negative q-mb-sm">
+          <template #avatar><q-icon name="error" color="negative" /></template>
+          {{ typeof response.error === 'string' ? response.error : (response.error.description || response.error.detail || response.error.title || t('Execution failed')) }}
+        </q-banner>
+        <details open>
+          <summary class="text-primary text-bold cursor-pointer">{{ t('Show Raw JSON') }}</summary>
+          <pre class="response-pre">{{ JSON.stringify(response, null, 2) }}</pre>
         </details>
       </div>
     </div>
+    <q-banner v-else-if="loadError" dense rounded class="bg-red-1 text-negative q-ma-md">
+      <template #avatar><q-icon name="error" color="negative" /></template>
+      <div class="text-weight-bold">{{ t('Process not found') }}</div>
+      <div class="text-body2">{{ loadError }}</div>
+      <template #action>
+        <q-btn flat color="primary" icon="arrow_back" :label="t('Back to the processes list')" to="/processes" />
+      </template>
+    </q-banner>
     <q-spinner v-else />
   </q-page>
   </div>
 </template>
- 
+
+<style scoped>
+.response-pre {
+  max-height: 480px;
+  overflow: auto;
+  /* theme token from app.vue: light grey by day, dark grey in dark mode */
+  background: var(--surface-code, #f4f4f4);
+  color: inherit;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+</style>

@@ -58,7 +58,7 @@ const emit = defineEmits<{
 .dialog-header {
   position: sticky;
   top: 0;
-  background: white;
+  background: var(--surface-bg, #fff);
   z-index: 10;
 }
 

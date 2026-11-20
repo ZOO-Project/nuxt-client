@@ -5,9 +5,8 @@
       @toggle-right="toggleRightDrawer"
     />
 
-    <q-drawer show-if-above v-model="leftDrawerOpen" side="left" bordered />
-    <q-drawer show-if-above v-model="rightDrawerOpen" side="right" bordered />
-
+    <!-- The two empty side drawers used to take 600 px and squeeze the pages
+         (tables broken into one-letter columns): the layout is now full width. -->
     <q-page-container>
       <NuxtPage />
     </q-page-container>

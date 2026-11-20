@@ -60,7 +60,7 @@ const emit = defineEmits<{
 }
 
 .dialog-header {
-  background: white;
+  background: var(--surface-bg, #fff);
   flex-shrink: 0;
 }
 
@@ -71,7 +71,7 @@ const emit = defineEmits<{
 }
 
 .dialog-footer {
-  background: white;
+  background: var(--surface-bg, #fff);
   flex-shrink: 0;
 }
 

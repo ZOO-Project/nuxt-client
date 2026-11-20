@@ -21,7 +21,7 @@
 
         <div v-if="!authStore.user">
           <q-btn class="q-ml-sm" dense no-caps color="accent"
-                 :label="t('Authenticate')" :href="`${authBase}/api/auth/signin`"/>
+                 :label="t('Authenticate')" @click="signIn('keycloak')"/>
         </div>
         <div v-else>
           <q-btn rounded dense flat>
@@ -50,7 +50,7 @@
       <q-route-tab
         v-for="tab in homeTab"
         :key="tab.path"
-        :href="tab.path"
+        :to="tab.path"
         :label="t(tab.label)"
         no-caps
       />
@@ -63,7 +63,7 @@
         v-for="tab in rightTabs"
         :key="tab.path"
         :label="t(tab.label)"
-        :href="tab.path"
+        :to="tab.path"
         no-caps
       />
     </q-tabs>
@@ -97,7 +97,7 @@ const loggedUser = ref({email: 'mathereall@gmail.com'}) // TODO: Implement user 
 const $q = useQuasar()
 const stringToMD5 = useStringToMD5()
 const router = useRouter()
-const {signOut} = useAuth()
+const { signOut, signIn } = useAuth()
 
 const { landingLinks } = useLandingLinks()
 // Get baseURL from app config

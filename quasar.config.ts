@@ -57,7 +57,8 @@ export function defineQuasarConfig(): {
                 warning: '#F2C037'
             },
             loadingBar: {
-                color: 'blue',
+                // same yellow as the Nuxt loading indicator (brand "warning")
+                color: 'warning',
                 size: '3px',
                 position: 'top'
             }

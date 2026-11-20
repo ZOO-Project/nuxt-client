@@ -1,350 +1,286 @@
 <template>
   <q-page class="q-pa-md">
     <div class="row justify-center">
-      <div class="col-12" style="max-width: 1000px;">
-        <p class="text-h4 q-mb-md text-weight-bold text-primary">{{t('Job Details')}}</p>
-        <q-separator class="q-mb-md" />
+      <div class="col-12" style="max-width: 1100px;">
+        <q-breadcrumbs class="q-mb-sm text-grey-7">
+          <q-breadcrumbs-el :label="t('Jobs')" to="/jobs" icon="work" />
+          <q-breadcrumbs-el :label="shortId" />
+        </q-breadcrumbs>
 
-        <q-card v-if="jobData" class="q-pa-md">
-          <q-card-section>
-            <div class="text-subtitle1 q-mb-sm">
-              <q-icon name="work" class="q-mr-sm" />
-              <span><strong>{{ t('Job ID') }}:</strong> {{ jobData.jobID }}</span>
-            </div>
+        <q-banner v-if="!canUseApi" dense rounded class="bg-orange-1 text-orange-10 q-mb-md">
+          <template #avatar><q-icon name="lock" color="orange-10" /></template>
+          {{ t('Sign in to view this job.') }}
+        </q-banner>
 
-            <q-separator class="q-my-md" />
+        <q-banner v-if="loadError" dense rounded class="bg-red-1 text-negative q-mb-md">
+          <template #avatar><q-icon name="error" color="negative" /></template>
+          {{ loadError }}
+        </q-banner>
 
-            <div class="q-mb-sm"><strong>{{ t('Process ID') }}:</strong> {{ jobData.processID }}</div>
-            <div class="row items-center justify-between q-mb-sm">
-              <div><strong>{{ t('Status') }}:</strong> {{ jobData.status }}</div>
-              <div v-if="jobData.links && jobData.links.length" style="width: 250px;">
-                <q-select
-                  filled
-                  dense
-                  :label="t('Job Link')"
-                  v-model="selectedLink"
-                  :options="linkOptions"
-                  option-label="label"
-                  option-value="value"
-                  emit-value
-                  map-options
-                  @update:model-value="fetchLinkContent"
-                />
+        <template v-if="job">
+          <!-- Header card -->
+          <q-card flat bordered class="q-mb-md">
+            <q-card-section>
+              <div class="row items-center q-col-gutter-sm">
+                <div class="col-auto">
+                  <JobStatusChip :status="job.status" />
+                </div>
+                <div class="col" style="min-width: 0">
+                  <div class="text-h5 text-weight-bold">
+                    <NuxtLink :to="`/processes/${job.processID}`" class="text-primary">{{ job.processID }}</NuxtLink>
+                  </div>
+                  <div class="text-caption text-grey-7 mono row items-center">
+                    <span style="word-break: break-all">{{ job.jobID }}</span>
+                    <CopyButton :text="job.jobID" :label="t('Copy job ID')" />
+                  </div>
+                </div>
+                <!-- On phones the actions take their own line instead of overlapping the identifier. -->
+                <div class="col-12 col-sm-auto row items-center justify-end q-gutter-xs">
+                  <q-btn flat dense icon="refresh" :loading="loading" @click="load">
+                    <q-tooltip>{{ t('Refresh') }}</q-tooltip>
+                  </q-btn>
+                  <q-btn flat dense icon="link" @click="copyPageUrl">
+                    <q-tooltip>{{ t('Copy the link to this page') }}</q-tooltip>
+                  </q-btn>
+                  <q-btn
+                    v-if="isActive"
+                    color="negative"
+                    outline
+                    dense
+                    icon="cancel"
+                    :label="t('Dismiss')"
+                    :loading="deleting"
+                    @click="confirmDelete"
+                  />
+                  <q-btn
+                    v-else
+                    color="negative"
+                    outline
+                    dense
+                    icon="delete"
+                    :label="t('Delete')"
+                    :loading="deleting"
+                    @click="confirmDelete"
+                  />
+                </div>
               </div>
-            </div>
 
-            <div class="q-mb-md"><strong>{{t('Created')}}:</strong> {{ jobData.created }}</div>
-
-            <div v-if="jobData.status === 'running'" class="q-mt-md">
-              <div class="q-mb-sm">
-                <strong>{{t('Progress')}}:</strong> {{ jobData.progress ?? 0 }}%
+              <div v-if="isActive" class="q-mt-md">
                 <q-linear-progress
+                  :value="(job.progress ?? 0) / 100"
+                  :indeterminate="job.progress === undefined"
                   color="primary"
-                  :value="(jobData.progress ?? 0) / 100"
-                  class="q-mt-xs"
+                  size="10px"
                   rounded
                   animated
                 />
+                <div class="row justify-between text-caption q-mt-xs">
+                  <span>{{ job.message || t('Processing...') }}</span>
+                  <span class="text-weight-bold">{{ job.progress ?? 0 }}%</span>
+                </div>
               </div>
-
-              <div class="q-mb-sm">
-                <strong>{{ t('Message') }}:</strong> {{ jobData.message || 'Processing...' }}
+              <div v-else-if="job.message" class="q-mt-md text-body2" :class="isFailed ? 'text-negative' : 'text-grey-8'">
+                {{ job.message }}
               </div>
-            </div>
+            </q-card-section>
 
+            <q-separator />
 
-            <div v-if="jobData.jobID" class="q-mt-md">
-                <a :href="jobResultsUrl" target="_blank">
-                  {{t('View Full Result JSON')}}
-                </a>
-            </div>
-          </q-card-section>
-        </q-card>
+            <!-- Timeline -->
+            <q-card-section class="row q-col-gutter-md">
+              <div v-for="step in timeline" :key="step.key" class="col-6 col-md-3">
+                <div class="text-caption text-grey-7">{{ step.label }}</div>
+                <div class="text-body2" :title="step.iso || ''">{{ step.text || '—' }}</div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="text-caption text-grey-7">{{ t('Duration') }}</div>
+                <div class="text-body2">{{ duration || '—' }}</div>
+              </div>
+            </q-card-section>
+          </q-card>
 
-        <q-spinner v-else class="q-mt-md" />
-         <div
-            v-if="['successful', 'failed'].includes(jobData?.status)"
-            id="map"
-            class="map q-mt-lg"
-            tabindex="0"
-            style="height: 300px; width: 100%; max-width: 1000px;"
+          <!-- Results -->
+          <JobResultsPanel
+            v-if="isSuccessful || isFailed"
+            ref="resultsPanel"
+            :job-id="jobId"
+            :status="job.status"
+            :links="job.links"
           />
-          <ol-map
-            v-if="['successful', 'failed'].includes(jobData?.status) && mapInstance"
-            :instance="mapInstance"
-          >
-            <ol-zoomslider-control />
-          </ol-map>
+
+          <!-- Logs -->
+          <JobLinksList
+            v-if="logLinks.length"
+            :links="logLinks"
+            :title="t('Logs')"
+            icon="article"
+            group="logs"
+            as-text
+          />
+
+          <!-- Links -->
+          <JobLinksList :links="otherLinks" :title="t('Links')" :empty-text="t('No links')" group="links" />
+
+          <q-expansion-item dense icon="data_object" :label="t('Raw job document')" class="q-mb-lg">
+            <JsonBlock :value="job" />
+          </q-expansion-item>
+        </template>
+
+        <div v-else-if="loading" class="q-mt-lg">
+          <q-skeleton type="rect" height="120px" />
+          <q-skeleton type="rect" height="200px" class="q-mt-md" />
+        </div>
       </div>
     </div>
-
-    <AppDialog
-      v-model="showModal"
-      :title="t('Link Content')"
-    >
-      <div v-if="modalContent">
-        <pre class="pre-content">{{ modalContent }}</pre>
-      </div>
-    </AppDialog>
   </q-page>
 </template>
 
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
-import { ref, onMounted, onBeforeUnmount, computed, nextTick, watch } from 'vue'
-import { useAuthStore } from '~/stores/auth'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-
-
-import Map from 'ol/Map'
-import View from 'ol/View'
-import TileLayer from 'ol/layer/Tile'
-import OSM from 'ol/source/OSM'
-import GeoJSON from 'ol/format/GeoJSON'
-import VectorSource from 'ol/source/Vector'
-import VectorLayer from 'ol/layer/Vector'
-import Feature from 'ol/Feature'
-import Polygon from 'ol/geom/Polygon'
-
-import AppDialog from '~/components/modal/AppDialog.vue'
+import { useQuasar, copyToClipboard } from 'quasar'
+import JobStatusChip from '~/components/jobs/JobStatusChip.vue'
+import JobResultsPanel from '~/components/jobs/JobResultsPanel.vue'
+import JobLinksList from '~/components/jobs/JobLinksList.vue'
+import CopyButton from '~/components/common/CopyButton.vue'
+import JsonBlock from '~/components/common/JsonBlock.vue'
+import {
+  formatDateTime,
+  formatDurationMs,
+  isActiveStatus,
+  isLogLink,
+  isTerminalStatus,
+  jobDurationMs,
+  normalizeStatus
+} from '~/composables/utils/jobs'
+import { errorSummary } from '~/composables/utils/ogcError'
 
 const route = useRoute()
-const authStore = useAuthStore()
-const { locale, t } = useI18n()
-const { buildOgcApiUrl, getRequestHeaders } = useOgcApiServer()
+const router = useRouter()
+const { t, locale } = useI18n()
+const $q = useQuasar()
+const { getJob, dismissJob } = useJobsApi()
+const { waitUntilReady } = useOgcApiServer()
 
+const jobId = String(route.params.jobId)
+const job = ref<any>(null)
+const loading = ref(false)
+const deleting = ref(false)
+const loadError = ref('')
+const canUseApi = ref(true)
+const now = ref(Date.now())
+const resultsPanel = ref<InstanceType<typeof JobResultsPanel> | null>(null)
 
-const jobId = route.params.jobId
-const jobData = ref<any>(null)
-let intervalId: ReturnType<typeof setInterval>
+const shortId = computed(() => (jobId.length > 13 ? `${jobId.slice(0, 8)}…${jobId.slice(-4)}` : jobId))
+const status = computed(() => normalizeStatus(job.value?.status))
+const isActive = computed(() => isActiveStatus(status.value))
+const isSuccessful = computed(() => status.value === 'successful')
+const isFailed = computed(() => status.value === 'failed')
 
-const selectedLink = ref(null)
-const modalContent = ref('')
-const showModal = ref(false)
-const geojsonData = ref(null)
-const mapInstance = ref<Map>()
-const jobResultsUrl = ref('')
-
-onMounted(() => {
-  fetchJobDetails()
-  intervalId = setInterval(fetchJobDetails, 3000)
-})
-
-
-
-onBeforeUnmount(() => {
-  clearInterval(intervalId)
-})
-
-
-watch(
-  () => jobData.value?.status,
-  async (status) => {
-    if ((status === 'successful' || status === 'failed') && !mapInstance.value) {
-      await nextTick()
-      const mapEl = document.getElementById('map')
-      if (!mapEl) return
-
-      mapInstance.value = new Map({
-        layers: [
-          new TileLayer({
-            source: new OSM(),
-          }),
-        ],
-        target: 'map',
-        view: new View({
-          center: [0, 0],
-          zoom: 2,
-          projection: 'EPSG:4326',
-        }),
-      })
-    }
-  }
-)
-
-
-const fetchJobDetails = async () => {
-  const bearer = authStore.token?.access_token
-  if (!bearer) {
-    console.warn('No bearer token available; skipping job details fetch')
-    clearInterval(intervalId)
-    return
-  }
-
-  try {
-    const jobUrl = await buildOgcApiUrl(`/jobs/${jobId}`, {
-      acceptLanguage: locale.value
-    })
-
-    const response = await $fetch(jobUrl, {
-      headers: getRequestHeaders(locale.value),
-    })
-    jobData.value = response
-    jobResultsUrl.value = await buildOgcApiUrl(`/jobs/${response.jobID}/results`, {
-      acceptLanguage: locale.value
-    })
-
-    if (response.status === 'succeeded' || response.status === 'failed') {
-      clearInterval(intervalId)
-    }
-  } catch (err) {
-    console.error('Error fetching job details:', err)
-    clearInterval(intervalId)
-  }
-}
-
-const linkOptions = computed(() => {
-  if (!jobData.value?.links) return []
-  return jobData.value.links.map((link: any, index: number) => ({
-    label: link.title || link.rel || `Link ${index + 1}`,
-    value: link.href,
+const timeline = computed(() => {
+  const steps = [
+    { key: 'created', label: t('Created') },
+    { key: 'started', label: t('Started') },
+    { key: 'updated', label: t('Updated') },
+    { key: 'finished', label: t('Finished') }
+  ]
+  return steps.map((step) => ({
+    ...step,
+    iso: job.value?.[step.key],
+    text: formatDateTime(job.value?.[step.key], locale.value)
   }))
 })
 
-const extractBBox = (response: any): number[] | null => {
-  // top-level bbox
-  if (Array.isArray(response?.bbox) && response.bbox.length === 4) {
-    return response.bbox
-  }
+const duration = computed(() => formatDurationMs(jobDurationMs(job.value, now.value)))
 
-  // STAC / OGC extent
-  if (response?.extent?.spatial?.bbox?.length) {
-    return response.extent.spatial.bbox[0]
-  }
+const logLinks = computed(() => (job.value?.links || []).filter((link: any) => isLogLink(link)))
+const otherLinks = computed(() => (job.value?.links || []).filter((link: any) => !isLogLink(link)))
 
-  // nested result.value
-  for (const key in response) {
-    const val = response[key]?.value
-    if (Array.isArray(val?.bbox) && val.bbox.length === 4) {
-      return val.bbox
-    }
-  }
+let timer: ReturnType<typeof setTimeout> | null = null
+let polls = 0
 
-  return null
+const scheduleNext = () => {
+  stopPolling()
+  if (!job.value || isTerminalStatus(job.value.status)) return
+  // 3 s for the first two minutes, then 10 s
+  const delay = polls < 40 ? 3000 : 10000
+  timer = setTimeout(load, delay)
 }
 
+const stopPolling = () => {
+  if (timer) clearTimeout(timer)
+  timer = null
+}
 
-
-const fetchLinkContent = async (href: string) => {
-  const bearer = authStore.token?.access_token
-  if (!bearer) {
-    modalContent.value = 'Authentication required to fetch this content.'
-    showModal.value = true
-    return
-  }
-
+const load = async () => {
+  loading.value = true
+  loadError.value = ''
   try {
-    const response = await $fetch(href, {
-      headers: getRequestHeaders(locale.value),
-    })
-
-    for (const key in response) {
-      const value = response[key]?.value ?? response[key]
-
-      // GeoJSON FeatureCollection
-      if (value?.type === 'FeatureCollection') {
-        geojsonData.value = value
-        showModal.value = false
-        showMapOnGeojson()
-        return
-      }
-
-      // bbox only 
-      const bbox = extractBBox(value)
-      if (bbox) {
-        showMapOnBBox(bbox)
-        return
-      }
-    }
-    modalContent.value = typeof response === 'object' ? JSON.stringify(response, null, 2) : response
-    showModal.value = true
-
-  } catch (err) {
-    modalContent.value = 'Failed to fetch link content'
-    showModal.value = true
-    console.error(err)
+    const ready = await waitUntilReady()
+    canUseApi.value = ready
+    if (!ready) return
+    job.value = await getJob(jobId)
+    now.value = Date.now()
+    polls += 1
+    scheduleNext()
+  } catch (err: any) {
+    loadError.value = errorSummary(err, t('Failed to load the job'))
+    if (err?.status === 404) stopPolling()
+    else scheduleNext()
+  } finally {
+    loading.value = false
   }
 }
 
-function clearVectorLayers() {
-  mapInstance.value?.getLayers().forEach((layer) => {
-    if (layer instanceof VectorLayer) {
-      mapInstance.value.removeLayer(layer)
+const copyPageUrl = async () => {
+  try {
+    await copyToClipboard(window.location.href)
+    $q.notify({ type: 'positive', message: t('Link copied') })
+  } catch {
+    /* ignore */
+  }
+}
+
+const confirmDelete = () => {
+  const active = isActive.value
+  $q.dialog({
+    title: active ? t('Dismiss job') : t('Delete job'),
+    message: active
+      ? t('The running job will be dismissed and removed. Continue?')
+      : t('The job and its results will be removed from the server. Continue?'),
+    cancel: true,
+    persistent: true,
+    ok: { label: active ? t('Dismiss') : t('Delete'), color: 'negative' }
+  }).onOk(async () => {
+    deleting.value = true
+    try {
+      await dismissJob(jobId)
+      stopPolling()
+      $q.notify({ type: 'positive', message: t('Job deleted successfully') })
+      router.push('/jobs')
+    } catch (err) {
+      $q.notify({ type: 'negative', message: errorSummary(err, t('Failed to delete job')) })
+    } finally {
+      deleting.value = false
     }
   })
 }
 
+let clock: ReturnType<typeof setInterval> | null = null
 
-async function showMapOnGeojson() {
-  await nextTick()
-  if (!mapInstance.value || !geojsonData.value) return
-
-  const format = new GeoJSON()
-  const features = format.readFeatures(geojsonData.value, {
-    featureProjection: 'EPSG:4326',
-  })
-
- 
-  clearVectorLayers()
-
-  const vectorSource = new VectorSource({ features })
-  const vectorLayer = new VectorLayer({ source: vectorSource })
-  mapInstance.value.addLayer(vectorLayer)
-
-  const extent = vectorSource.getExtent()
-  mapInstance.value.getView().fit(extent, {
-    padding: [50, 50, 50, 50],
-    maxZoom: 10,
-    duration: 1000,
-  })
-}
-
-function showMapOnBBox(bbox: number[]) {
-  if (!mapInstance.value) return
-
-  const [minX, minY, maxX, maxY] = bbox
-
-  const polygon = new Polygon([[
-    [minX, minY],
-    [maxX, minY],
-    [maxX, maxY],
-    [minX, maxY],
-    [minX, minY],
-  ]])
-
-  const feature = new Feature({
-    geometry: polygon,
-  })
-
-  const vectorSource = new VectorSource({
-    features: [feature],
-  })
-
-  const vectorLayer = new VectorLayer({
-    source: vectorSource,
-  })
-
-  clearVectorLayers()
-
-  mapInstance.value.addLayer(vectorLayer)
-
-  mapInstance.value.getView().fit(
-    [minX, minY, maxX, maxY],
-    {
-      padding: [40, 40, 40, 40],
-      maxZoom: 8,
-      duration: 800,
-    }
-  )
-}
-
-
-
+onMounted(() => {
+  clock = setInterval(() => (now.value = Date.now()), 1000)
+  load()
+})
+onBeforeUnmount(() => {
+  stopPolling()
+  if (clock) clearInterval(clock)
+})
 </script>
 
-<style>
-.pre-content {
-  white-space: pre-wrap;
-  word-break: break-word;
+<style scoped>
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 </style>

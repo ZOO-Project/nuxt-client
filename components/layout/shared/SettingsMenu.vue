@@ -14,6 +14,11 @@
           </q-item>
           <q-item>
             <q-item-section>
+              <q-toggle v-model="darkMode" :label="t('Dark mode')" icon="dark_mode" dense />
+            </q-item-section>
+          </q-item>
+          <q-item>
+            <q-item-section>
               <q-select
                 v-model="selectedLayout"
                 :options="[
@@ -31,15 +36,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { useLayoutStore } from '~/stores/layout'
 import { useI18n } from 'vue-i18n'
 import { useCookie } from '#app'
+import { useQuasar } from 'quasar'
+import { darkPreference } from '~/composables/utils/theme'
 
 
 const options = [
   { label: 'English', value: 'en-US' },
-  { label: 'Française', value: 'fr-FR' }
+  { label: 'Français', value: 'fr-FR' }
 ]
 
 const { locale, t } = useI18n()
@@ -52,7 +59,6 @@ const selectedLang = ref(langCookie.value || 'en-US')
 watch(selectedLang, (val) => {
   langCookie.value = val
   locale.value = val 
-  console.log("Cookie + Header:", val)
   window.location.reload()
 })
 
@@ -65,5 +71,18 @@ watch(selectedLayout, (val) => {
   layoutStore.setLayout(val)
 })
 
-const authStore = useAuthStore()
+// Dark mode, persisted in a cookie so that SSR renders the right theme.
+const $q = useQuasar()
+const darkCookie = useCookie<string>('dark_mode', { maxAge: 60 * 60 * 24 * 365 })
+// Without a cookie the theme follows the system: reflect the active state.
+const preference = darkPreference(darkCookie.value)
+const darkMode = ref(preference === 'auto' ? $q.dark.isActive : preference)
+onMounted(() => {
+  darkMode.value = $q.dark.isActive
+})
+watch(darkMode, (val) => {
+  if (val === $q.dark.isActive) return
+  darkCookie.value = val ? '1' : '0'
+  $q.dark.set(val)
+})
 </script>

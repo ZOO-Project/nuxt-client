@@ -13,9 +13,11 @@ if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir, { recursive: true })
 }
 
-const files = fs.readdirSync(fixturesDir) .filter(file => file.endsWith(".cwl"))
+const files = fs.existsSync(fixturesDir) ? fs.readdirSync(fixturesDir).filter(file => file.endsWith(".cwl")) : []
 
-describe("CWL Metadata Patterns", () => {
+// The CWL fixtures are downloaded by the CI workflow (see .github/workflows/test.yml);
+// skip the suite instead of failing when they are missing locally.
+describe.skipIf(files.length === 0)("CWL Metadata Patterns", () => {
 
   files.forEach((file) => {
 

@@ -25,6 +25,14 @@ ENV PORT=3000
 ENV NITRO_HOST=0.0.0.0
 ENV NITRO_PORT=3000
 
+# Pick up the Debian security updates published since the base image was
+# built, and drop npm/npx/corepack: the server is started with `node` alone
+# and the npm CLI ships its own (regularly vulnerable) dependency tree.
+RUN apt-get update -qq \
+    && apt-get upgrade -qqy --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
 # Ownership set at copy time (avoids slow `chown -R` layer).
 COPY --from=builder --chown=node:node /usr/src/app/.output ./.output
 

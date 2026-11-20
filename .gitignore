@@ -131,3 +131,8 @@ dist
 
 # macOS 
 .DS_Store
+# Nuxt production build
+.output
+
+# playwright-cli snapshots
+.playwright-cli/
